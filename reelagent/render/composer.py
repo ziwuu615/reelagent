@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import wave
@@ -200,6 +201,28 @@ def has_audio_stream(path: Path, ffmpeg: str) -> bool:
     return "Audio:" in proc.stderr
 
 
+def _probe_duration(ffmpeg: str, path: Path) -> float:
+    """读取媒体文件的时长（秒）。
+
+    读不出时返回 0.0 —— 调用方会退化为不做音频对齐，而不是让整条合成失败。
+    GIF / MP4 / WAV 都能通过 fmpeg -i 的 stderr 里那行 Duration 读到。
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception:
+        return 0.0
+
+    m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", proc.stderr)
+    if not m:
+        return 0.0
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+
+
 def compose_mp4(
     *,
     ffmpeg: str,
@@ -246,6 +269,20 @@ def compose_mp4(
     has_tts = bool(audio and audio.exists())
     has_native = has_audio_stream(existing[0], ffmpeg)
 
+    # 先把**画面总时长**算出来。
+    #
+    # 为什么必须自己算：`-shortest` 在「apad 补静音」的组合下并不可靠
+    # （实测：画面 2s + 旁白 8s，加了 apad 之后成片仍是 8.27s，
+    # 说明它没有按画面收尾）。与其依赖 ffmpeg 的隐式行为，
+    # 不如显式把音频对齐到画面长度，结果可预测。
+    total_video_s = sum(_probe_duration(ffmpeg, c) for c in existing)
+
+    # 把音频严格对齐到画面时长：长了截断，短了补静音。
+    # 这是「成片时长以画面为准」这条语义的唯一保证点。
+    align_audio = (
+        f"atrim=0:{total_video_s:.3f},apad=whole_dur={total_video_s:.3f}" if total_video_s > 0 else ""
+    )
+
     cmd = [
         ffmpeg,
         "-y",
@@ -264,30 +301,45 @@ def compose_mp4(
     if has_native and has_tts:
         # 混音：原生音轨降到背景，TTS 保持原音量。
         #   normalize=0  保留我们设定的权重（amix 默认会自动归一化，把两路都压低）
-        #   duration=first 以片段总长为基准，避免旁白较短时成片被截断
+        #   duration=first 以片段总长为基准，避免旁白较短时混音结果被截断
+        # 最后再统一对齐到画面总长（见 align_audio）。
         # audio 此处必然非 None（has_tts 为真），显式确认以免类型歧义。
         assert audio is not None
+        chain = (
+            f"[0:a]volume={NATIVE_AUDIO_BED_GAIN}[bed];"
+            "[1:a]volume=1.0[voice];"
+            "[bed][voice]amix=inputs=2:duration=first:normalize=0"
+        )
+        if align_audio:
+            chain += f",{align_audio}"
         cmd += [
             "-filter_complex",
-            (
-                f"[0:a]volume={NATIVE_AUDIO_BED_GAIN}[bed];"
-                "[1:a]volume=1.0[voice];"
-                "[bed][voice]amix=inputs=2:duration=first:normalize=0[mixed]"
-            ),
+            chain + "[mixed]",
             "-map",
             "0:v",
             "-map",
             "[mixed]",
         ]
     elif has_native:
+        # 原生音轨与画面同源同长，不需要额外对齐
         cmd += ["-map", "0:v", "-map", "0:a"]
     elif has_tts:
         cmd += ["-map", "0:v", "-map", "1:a"]
+        if align_audio:
+            cmd += ["-af", align_audio]
     else:
         cmd += ["-map", "0:v"]
 
     if has_native or has_tts:
-        cmd += ["-c:a", "aac", "-shortest"]
+        # 注意：这里**故意不用 `-shortest`**。
+        #
+        # 真实事故：3 镜 draft 项目，片段合计 8.66 秒，TTS 旁白只有 6.40 秒，
+        # `-shortest` 让成片停在 6.40 秒 —— 丢了 2.3 秒画面，第三镜收尾整段消失。
+        # 而项目状态 ready、镜头 3/3 完成、成本正常记账，没有任何报错。
+        #
+        # 现在由 align_audio 显式把音频对齐到画面长度，
+        # 输出时长只由画面决定，不再依赖 ffmpeg 对"最短流"的判断。
+        cmd += ["-c:a", "aac"]
 
     cmd += [
         "-vf",
