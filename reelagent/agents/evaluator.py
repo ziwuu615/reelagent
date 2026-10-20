@@ -75,7 +75,7 @@ class Evaluator(Agent):
     def _gate(metrics: dict[str, Any], judge: dict[str, Any] | None) -> dict[str, Any]:
         """CI 门禁：给出通过/不通过判定与失败原因。
 
-        对应 JD："建设评测集管理与 CI 门禁，使每次 Prompt、模型、工具变更
+        设计要点："建设评测集管理与 CI 门禁，使每次 Prompt、模型、工具变更
         都有量化的收益与回归判定。"
         """
         failures: list[str] = []

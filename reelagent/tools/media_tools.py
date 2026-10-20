@@ -1,6 +1,6 @@
 """媒体生成工具：把供应商能力包装成可注册、可调用、可追踪的 Tool。
 
-对应 JD："Tool/Skill 抽象与注册机制"、"标准化 Toolcall 调用与技能编排"。
+设计要点："Tool/Skill 抽象与注册机制"、"标准化 Toolcall 调用与技能编排"。
 
 每个工具都会：
   1. 写出 span（可观测）
@@ -14,11 +14,49 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..harness.registry import arr_prop, num_prop, obj_schema, str_prop
+from PIL import Image, ImageStat
+
+from ..harness.registry import ToolError, arr_prop, num_prop, obj_schema, str_prop
 from ..providers.base import size_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..runtime import Runtime
+
+
+#: 判定「退化图像」的阈值。
+#:
+#: 真实事故：某次生产运行里，图像供应商对其中一镜返回了**纯黑图**
+#: （标准差 0.0、全图只有 1 种颜色），而流水线照单全收：
+#:   - 关键帧落盘成功、状态正常、没有报错
+#:   - 下游 Ken Burns 只能从纯色图裁出完全相同的帧，
+#:     最终合成出**单帧 GIF**（1.4 KB，另两镜是 4.6 MB / 3.6 MB）
+#:   - 成片里那一段是黑屏，而项目状态显示 ready、3/3 镜头完成
+#:
+#: 这类失败极难发现：HTTP 200、产物齐全、指标全绿，
+#: 唯一的线索是文件大小异常。所以必须在写入后立刻校验。
+#:
+#: 阈值定得很保守（标准差 < 2.0）：真实照片哪怕平淡如白墙，
+#: 标准差通常也在 15 以上；取 2.0 只会在图像确实是纯色时触发。
+_MIN_STDDEV = 2.0
+_MAX_DEGENERATE_COLORS = 2
+
+
+def _assert_image_not_degenerate(path: Path, *, what: str) -> None:
+    """确认生成的图像不是纯色/空白图，否则抛 ToolError 交给重试机制。"""
+    try:
+        with Image.open(path) as im:
+            rgb = im.convert("RGB")
+            stat = ImageStat.Stat(rgb)
+            stddev = sum(stat.stddev) / 3.0
+            colors = rgb.getcolors(maxcolors=1 << 20)
+    except Exception as exc:
+        raise ToolError(f"{what} 无法读取为图片：{exc}") from exc
+
+    n_colors = len(colors) if colors else 0
+    if stddev < _MIN_STDDEV or n_colors <= _MAX_DEGENERATE_COLORS:
+        raise ToolError(
+            f"{what} 是退化图像（唯一色 {n_colors}、标准差 {stddev:.2f}）：供应商返回了纯色或空白图，需要重试"
+        )
 
 
 def register_media_tools(rt: Runtime) -> None:
@@ -61,6 +99,9 @@ def register_media_tools(rt: Runtime) -> None:
         ) as sp:
             started = time.perf_counter()
             res = image_p.generate(prompt=prompt, out_path=out, size=size, ref_images=refs, seed=seed)
+            # 供应商可能返回纯色图（见 _assert_image_not_degenerate 的说明）。
+            # 必须在**计费与落盘确认之前**就发现，否则会把一张黑图当成有效产物。
+            _assert_image_not_degenerate(out, what=f"关键帧（{shot_id or out.name}）")
             rt.record_media_cost(
                 category="image",
                 provider=res.provider,

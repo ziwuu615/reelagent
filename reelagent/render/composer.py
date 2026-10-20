@@ -3,7 +3,7 @@
 优先使用 ffmpeg 输出 MP4（含音轨）；检测不到 ffmpeg 时自动降级为
 **GIF 成片 + WAV 音轨 + 分镜九宫格 + manifest**，仍然交付一个可看的成片。
 
-对应 JD："构建面向影视制作的 AIGC 管线"、"FFmpeg 合成"、"导出剪映草稿"。
+设计要点："构建面向影视制作的 AIGC 管线"、"FFmpeg 合成"、"导出剪映草稿"。
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """上下文窗口管理：组装 + 压缩 + Token 预算。
 
-对应 JD：
+设计要点：
   - "Context 组装与压缩策略"（腾讯 Agent Harness）
   - "在模型窗口和 token efficiency 约束下引导模型聚焦关键信息"（腾讯 WorkBuddy Context Engineering 方向）
   - "优化 LLM 请求组织、上下文复用、Prompt Cache、Token 使用效率"（字节即梦 Agent Harness）

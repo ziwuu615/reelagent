@@ -1,6 +1,6 @@
 """工具注册表（Tool / Skill 抽象与注册）。
 
-对应 JD：
+设计要点：
   - "Tool/Skill 抽象与注册机制"（腾讯 Agent Harness）
   - "标准协议接入内外部开发的 Agent"（字节 Agent 软件架构师）
 
