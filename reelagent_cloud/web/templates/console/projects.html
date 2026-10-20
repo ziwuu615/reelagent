@@ -1,0 +1,158 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}我的成片 · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <h1>我的成片</h1>
+    <p class="lede">
+      共 {{ total }} 条项目
+      {% if status_filter or query %}· 已按当前筛选条件过滤{% endif %}
+      · 单条成片最多 {{ plan.max_shots_per_project }} 个镜头
+    </p>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-primary" href="/app/projects/new">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      新建成片
+    </a>
+  </div>
+</div>
+
+{# 筛选与搜索 #}
+<form class="filter-bar" method="get" action="/app/projects">
+  <div class="field">
+    <label for="status_filter">状态</label>
+    <select id="status_filter" name="status_filter" data-auto-submit>
+      <option value="">全部状态</option>
+      {% for value in all_statuses %}
+        <option value="{{ value }}"{% if status_filter == value %} selected{% endif %}>{{ value|status_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field field-grow">
+    <label for="q">搜索</label>
+    <input type="search" id="q" name="q" value="{{ query }}" maxlength="60"
+           placeholder="按标题或素材内容搜索">
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-soft" type="submit">筛选</button>
+    {% if status_filter or query %}
+      <a class="btn btn-ghost" href="/app/projects">重置</a>
+    {% endif %}
+  </div>
+</form>
+
+{% if items %}
+  <div class="grid grid-3">
+    {% for item in items %}
+      {% set job = job_map.get(item.id) %}
+      <article class="card card-hover">
+        <div class="card-head">
+          <div class="grow">
+            <a class="card-title" href="/app/projects/{{ item.id }}">{{ item.title or '未命名成片' }}</a>
+            <p class="card-sub">{{ item.created_at|relative }} · {{ item.style }}</p>
+          </div>
+          {% set status = item.status %}{% set label = none %}
+          {% include 'partials/badge.html' %}
+        </div>
+
+        <div class="card-body">
+          <p class="muted small" style="min-height: 3em">{{ item.seed_text|truncate(78, true) }}</p>
+
+          {% if job and item.status.value in ['queued', 'running'] %}
+            <div class="mini-progress mt-2">
+              <div class="progress"><div class="progress-fill tone-busy" style="width: {{ (job.progress * 100)|round(0) }}%"></div></div>
+              <em>{{ job.stage|stage_label }}</em>
+            </div>
+          {% endif %}
+
+          <dl class="meta-list mt-3">
+            <div class="meta-row">
+              <dt>画幅 / 镜头</dt>
+              <dd>{{ item.aspect_ratio }} · {{ item.finished_shots }}/{{ item.total_shots or plan.max_shots_per_project }}</dd>
+            </div>
+            <div class="meta-row">
+              <dt>成片时长</dt>
+              <dd>{{ item.duration_seconds|duration }}</dd>
+            </div>
+            <div class="meta-row">
+              <dt>消耗点数</dt>
+              <dd>{{ item.credits_spent|credits }} 点</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="card-foot">
+          <a class="btn btn-soft btn-sm" href="/app/projects/{{ item.id }}">详情</a>
+          <div class="btn-row">
+            {% if item.status.value in ['queued', 'running'] %}
+              <a class="btn btn-ghost btn-sm" href="/app/projects/{{ item.id }}">查看进度</a>
+            {% else %}
+              <a class="btn btn-ghost btn-sm" href="/app/projects/{{ item.id }}/studio">工作室</a>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+
+  {# 分页 #}
+  {% if pages > 1 %}
+    <div class="card mt-4">
+      <div class="card-body">
+        <div class="pager">
+          <p class="muted small mb-0">
+            第 {{ page }} / {{ pages }} 页 · 每页 {{ per_page }} 条 · 共 {{ total }} 条
+          </p>
+          <div class="pager-links">
+            {% if page > 1 %}
+              <a href="/app/projects?page={{ page - 1 }}&status_filter={{ status_filter }}&q={{ query }}">上一页</a>
+            {% else %}
+              <span class="is-disabled">上一页</span>
+            {% endif %}
+
+            {% for p in range(1, pages + 1) %}
+              {% if p == page %}
+                <span class="is-current">{{ p }}</span>
+              {% elif p <= 2 or p > pages - 2 or (p >= page - 1 and p <= page + 1) %}
+                <a href="/app/projects?page={{ p }}&status_filter={{ status_filter }}&q={{ query }}">{{ p }}</a>
+              {% elif p == 3 or p == pages - 2 %}
+                <span class="is-disabled">…</span>
+              {% endif %}
+            {% endfor %}
+
+            {% if page < pages %}
+              <a href="/app/projects?page={{ page + 1 }}&status_filter={{ status_filter }}&q={{ query }}">下一页</a>
+            {% else %}
+              <span class="is-disabled">下一页</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% else %}
+  <div class="card">
+    <div class="card-body">
+      <div class="empty">
+        <div class="empty-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24" width="22" height="22"><path d="M4 5h16v14H4z" stroke="currentColor" stroke-width="1.8"/><path d="m10 9.5 5 2.5-5 2.5v-5Z" fill="currentColor"/></svg>
+        </div>
+        {% if status_filter or query %}
+          <p class="empty-title">没有符合条件的项目</p>
+          <p class="muted">换一个状态或关键词试试，也可以重置筛选条件。</p>
+          <a class="btn btn-ghost" href="/app/projects">重置筛选</a>
+        {% else %}
+          <p class="empty-title">还没有任何成片</p>
+          <p class="muted">贴一段文字，选择风格与画幅，3-8 分钟就能拿到第一条成片。</p>
+          <a class="btn btn-primary" href="/app/projects/new">新建第一条成片</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

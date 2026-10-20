@@ -1,0 +1,21 @@
+{# 提示条。取路由 context 的 flash / error（查询串回填），两者可以同时存在。 #}
+{% set flash_msg = flash|default('') %}
+{% set error_msg = error|default('') %}
+{% if error_msg %}
+  <div class="alert alert-error" role="alert" data-flash>
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>{{ error_msg }}</span>
+    <button type="button" class="alert-close" data-dismiss aria-label="关闭提示">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+{% endif %}
+{% if flash_msg %}
+  <div class="alert alert-ok" role="status" data-flash>
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>{{ flash_msg }}</span>
+    <button type="button" class="alert-close" data-dismiss aria-label="关闭提示">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+{% endif %}

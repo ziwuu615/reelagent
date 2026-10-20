@@ -1,0 +1,6 @@
+{# 状态徽章。用法：{% include 'partials/badge.html' with context %}
+   需要先定义：{% set status = item.status %}{% set label = '可选覆盖文案' %}
+   status_tone 返回 ok|busy|bad|muted|neutral，直接作为 class 后缀。 #}
+{% set _badge_status = status|default('') %}
+{% set _badge_label = label|default(_badge_status|status_label) %}
+<span class="badge badge-{{ _badge_status|status_tone }}"><i class="dot"></i>{{ _badge_label }}</span>

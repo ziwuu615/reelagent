@@ -1,0 +1,250 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}概览 · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+{# 注册后的欢迎提示 #}
+{% if welcome %}
+  <div class="alert alert-ok" role="status">
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 5 6.6v5.6c0 4 2.9 7 7 8.3 4.1-1.3 7-4.3 7-8.3V6.6L12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    <span>
+      欢迎加入 {{ product_name }}！已为你的组织发放
+      <strong>{{ signup_credits|credits }} 点</strong>注册额度，
+      可以直接去<a href="/app/projects/new">新建第一条成片</a>。
+    </span>
+    <button type="button" class="alert-close" data-dismiss aria-label="关闭提示">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+{% endif %}
+
+<div class="page-head">
+  <div>
+    <h1>{{ org.name }}</h1>
+    <p class="lede">
+      当前套餐 <strong>{{ plan.name }}</strong> · {{ plan.tagline }}
+      {% if org.is_suspended %}
+        · <span class="badge badge-bad"><i class="dot"></i>组织已暂停</span>
+      {% endif %}
+    </p>
+    {% if org.is_suspended and org.suspended_reason %}
+      <p class="muted small">暂停原因：{{ org.suspended_reason }}。请联系 {{ support_email }}。</p>
+    {% endif %}
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-ghost" href="/app/projects">全部成片</a>
+    <a class="btn btn-primary" href="/app/projects/new">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      新建成片
+    </a>
+  </div>
+</div>
+
+{# KPI #}
+<div class="grid grid-4 mb-4">
+  <div class="stat">
+    <p class="stat-label">
+      <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8"/><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      可用额度
+    </p>
+    <p class="stat-value">{{ org.credits_balance|credits }}<span>点</span></p>
+    <p class="stat-hint">
+      本周期 {{ plan.monthly_credits|credits }} 点 · 订阅额度不结转
+    </p>
+  </div>
+
+  <div class="stat">
+    <p class="stat-label">
+      <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5v-11Z" fill="currentColor"/></svg>
+      项目总数
+    </p>
+    <p class="stat-value">{{ counts.total|credits }}<span>条</span></p>
+    <p class="stat-hint">已完成 {{ counts.ready }} 条 · 进行中 {{ counts.active }} 条</p>
+  </div>
+
+  <div class="stat">
+    <p class="stat-label">
+      <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 3.5V12l6 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      运行中任务
+    </p>
+    <p class="stat-value">{{ active_job_count }}<span>个</span></p>
+    <p class="stat-hint">并发上限 {{ plan.max_concurrent_jobs }} 个</p>
+  </div>
+
+  <div class="stat">
+    <p class="stat-label">
+      <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 19V9m4.7 10V5M14.3 19v-7M19 19v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      套餐状态
+    </p>
+    <p class="stat-value" style="font-size:1.25rem">
+      {% set status = plan_summary.status %}{% set label = none %}
+      {% include 'partials/badge.html' %}
+    </p>
+    <p class="stat-hint">
+      {% if plan_summary.current_period_end %}
+        当前周期至 {{ plan_summary.current_period_end|dt('%Y-%m-%d') }}
+      {% elif plan_summary.tier == 'free' %}
+        体验版 · 单条成片最多 {{ plan.max_shots_per_project }} 镜
+      {% else %}
+        无到期时间
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="grid grid-2-1">
+  {# 最近项目 #}
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title">最近的成片</h3>
+        <p class="card-sub">共 {{ total_projects }} 条，显示最新 {{ recent|length }} 条</p>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="/app/projects">查看全部</a>
+    </div>
+
+    {% if recent %}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">项目</th>
+              <th scope="col">状态</th>
+              <th scope="col" class="num">镜头</th>
+              <th scope="col" class="num">时长</th>
+              <th scope="col" class="num">消耗点数</th>
+              <th scope="col">创建时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in recent %}
+              <tr>
+                <td>
+                  <a class="cell-title" href="/app/projects/{{ item.id }}">{{ item.title or '未命名成片' }}</a>
+                  <span class="cell-sub">{{ item.seed_text|truncate(52, true) }}</span>
+                </td>
+                <td>
+                  {% set status = item.status %}{% set label = none %}
+                  {% include 'partials/badge.html' %}
+                </td>
+                <td class="num">{{ item.finished_shots }}/{{ item.total_shots or plan.max_shots_per_project }}</td>
+                <td class="num">{{ item.duration_seconds|duration }}</td>
+                <td class="num">{{ item.credits_spent|credits }}</td>
+                <td class="tight muted">{{ item.created_at|relative }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="card-body">
+        <div class="empty">
+          <div class="empty-icon" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24" width="22" height="22"><path d="M4 5h16v14H4z" stroke="currentColor" stroke-width="1.8"/><path d="m10 9.5 5 2.5-5 2.5v-5Z" fill="currentColor"/></svg>
+          </div>
+          <p class="empty-title">还没有任何成片</p>
+          <p class="muted">贴一段文字，3-8 分钟就能拿到第一条成片。</p>
+          <a class="btn btn-primary" href="/app/projects/new">新建第一条成片</a>
+        </div>
+      </div>
+    {% endif %}
+  </section>
+
+  {# 进行中的任务 #}
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title">进行中的任务</h3>
+        <p class="card-sub">包含排队、执行与可重试失败的任务</p>
+      </div>
+    </div>
+
+    {% if active_jobs %}
+      <div class="card-body" style="display: grid; gap: 14px">
+        {% for job in active_jobs %}
+          <div>
+            <div class="flex-between">
+              <a class="mono" href="/app/projects/{{ job.project_id }}">{{ job.project_id }}</a>
+              {% set status = job.status %}{% set label = none %}
+              {% include 'partials/badge.html' %}
+            </div>
+            <p class="muted small mb-1">{{ job.stage|stage_label }} · 创建于 {{ job.created_at|relative }}</p>
+            <div class="mini-progress">
+              <div class="progress"><div class="progress-fill tone-{{ job.status|status_tone }}" style="width: {{ (job.progress * 100)|round(0) }}%"></div></div>
+              <em>{{ (job.progress * 100)|round(0) }}%</em>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="card-foot">
+        <span class="muted small">任务进度告一段落后，页面刷新即可看到成片。</span>
+      </div>
+    {% else %}
+      <div class="card-body">
+        <div class="empty" style="padding: 26px 10px">
+          <p class="empty-title">当前没有进行中的任务</p>
+          <p class="muted small">队列空闲，新建项目可以立即开始生成。</p>
+        </div>
+      </div>
+    {% endif %}
+  </section>
+</div>
+
+{# 额度流水 #}
+<section class="card mt-4">
+  <div class="card-head">
+    <div>
+      <h3 class="card-title">额度流水</h3>
+      <p class="card-sub">只追加的账本记录，附带每笔变动后的余额，便于对账</p>
+    </div>
+    <a class="btn btn-ghost btn-sm" href="/app/usage">全部流水</a>
+  </div>
+
+  {% if ledger %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">时间</th>
+            <th scope="col">类型</th>
+            <th scope="col">说明</th>
+            <th scope="col" class="num">变动</th>
+            <th scope="col" class="num">变动后余额</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set kind_names = {
+            'signup_grant': '注册赠送', 'plan_grant': '周期发放', 'purchase': '点数包购买',
+            'consume': '生成消耗', 'refund': '失败退还', 'adjustment': '人工调整', 'expire': '过期作废'
+          } %}
+          {% for entry in ledger %}
+            <tr>
+              <td class="tight muted">{{ entry.created_at|dt }}</td>
+              <td>
+                <span class="tag">{{ kind_names.get(entry.kind.value, entry.kind.value) }}</span>
+              </td>
+              <td>
+                {{ entry.description or '—' }}
+                {% if entry.project_id %}
+                  <span class="cell-sub mono">{{ entry.project_id }}</span>
+                {% endif %}
+              </td>
+              <td class="num {{ 'amount-pos' if entry.amount > 0 else 'amount-neg' }}">
+                {{ '+' if entry.amount > 0 else '' }}{{ entry.amount|credits }}
+              </td>
+              <td class="num">{{ entry.balance_after|credits }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card-body">
+      <div class="empty" style="padding: 26px 10px">
+        <p class="empty-title">还没有额度变动</p>
+        <p class="muted small">注册赠送、套餐发放与生成消耗都会记录在这里。</p>
+      </div>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

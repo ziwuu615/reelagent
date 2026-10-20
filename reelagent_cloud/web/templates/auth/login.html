@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% set layout = 'auth' %}
+{% block title %}登录 · {{ product_name }}{% endblock %}
+{% block description %}登录 {{ product_name }} 控制台，继续你的成片项目。{% endblock %}
+
+{% block auth_content %}
+<aside class="auth-aside">
+  <a class="brand" href="/">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+        <rect x="1.5" y="5.5" width="21" height="21" rx="5.5" stroke="currentColor" stroke-width="2"/>
+        <path d="M22.5 14.2 30 9.4v13.2l-7.5-4.8z" fill="currentColor" opacity=".85"/>
+      </svg>
+    </span>
+    <span class="brand-text"><strong>{{ product_name }}</strong><small>AI 短视频生成平台</small></span>
+  </a>
+
+  <div>
+    <h2>继续把素材变成成片</h2>
+    <p class="lede">登录后可以查看生成进度、逐镜微调提示词，并核对每一笔额度消耗。</p>
+    <ul class="auth-points">
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>跨镜头一致性：角色与场景基准图全程锁定</span>
+      </li>
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>单镜重跑：只重做不满意的镜头，费用按量计算</span>
+      </li>
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>失败全额退还，账本随时可对账</span>
+      </li>
+    </ul>
+  </div>
+
+  <p class="muted small">遇到登录问题？联系 {{ support_email }}</p>
+</aside>
+
+<div class="auth-main">
+  <div class="auth-card">
+    <h1>登录</h1>
+    <p class="lede">使用注册邮箱继续。</p>
+
+    {% if error %}
+      <div class="form-error mt-3" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form class="auth-form" method="post" action="/login" data-lock>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next|default('/app') }}">
+
+      <div class="field">
+        <label for="email">邮箱</label>
+        <input type="email" id="email" name="email" value="{{ email|default('') }}"
+               autocomplete="username" required autofocus placeholder="you@example.com">
+      </div>
+
+      <div class="field">
+        <label for="password">密码</label>
+        <div class="input-wrap">
+          <input type="password" id="password" name="password" autocomplete="current-password"
+                 required placeholder="请输入密码" style="padding-right: 44px">
+          <button type="button" class="icon-btn-inside" data-toggle-password="#password"
+                  aria-label="显示密码" aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" stroke="currentColor" stroke-width="1.8"/>
+              <circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.8"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-block btn-lg" type="submit">登录</button>
+    </form>
+
+    <p class="auth-foot">
+      还没有账号？<a href="/signup">免费注册</a>
+      {% if settings.security.allow_signup is defined and not settings.security.allow_signup %}
+        · 当前暂未开放注册
+      {% endif %}
+    </p>
+    <p class="auth-legal">
+      登录即表示你同意 <a href="/terms">服务条款</a> 与 <a href="/privacy">隐私政策</a>。
+      {% if settings.security.https_only %}本站在 HTTPS 下运行，会话 Cookie 加密传输。{% endif %}
+    </p>
+    <p class="auth-legal"><a href="/">← 返回首页</a></p>
+  </div>
+</div>
+{% endblock %}

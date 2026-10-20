@@ -1,0 +1,45 @@
+{# 站点页脚。控制台布局不渲染页脚（侧边栏已承担账户入口）。 #}
+<footer class="site-footer">
+  <div class="container container-wide footer-inner">
+    <div class="footer-brand">
+      <span class="brand-mark brand-mark-sm" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="20" height="20" fill="none">
+          <rect x="1.5" y="5.5" width="21" height="21" rx="5.5" stroke="currentColor" stroke-width="2"/>
+          <path d="M22.5 14.2 30 9.4v13.2l-7.5-4.8z" fill="currentColor" opacity=".85"/>
+        </svg>
+      </span>
+      <div>
+        <strong>{{ product_name }}</strong>
+        <p class="muted">把一段文字，拆成分镜，再拍成片。</p>
+      </div>
+    </div>
+
+    <nav class="footer-cols" aria-label="页脚导航">
+      <div class="footer-col">
+        <p class="footer-title">产品</p>
+        <a href="/#features">功能矩阵</a>
+        <a href="/#how">三步流程</a>
+        <a href="/#styles">风格预设</a>
+        <a href="/pricing">定价</a>
+      </div>
+      <div class="footer-col">
+        <p class="footer-title">资源</p>
+        <a href="/status">系统状态</a>
+        <a href="{{ settings.docs_url }}">API 文档</a>
+        <a href="mailto:{{ support_email }}">{{ support_email }}</a>
+      </div>
+      <div class="footer-col">
+        <p class="footer-title">法律</p>
+        <a href="/terms">服务条款</a>
+        <a href="/privacy">隐私政策</a>
+      </div>
+    </nav>
+  </div>
+
+  <div class="container container-wide footer-bottom">
+    <p>© {{ current_year }} {{ product_name }}. 保留所有权利。</p>
+    <p class="muted">
+      {% if billing_enabled %}支付由 Stripe 处理，本站不存储卡号。{% else %}当前部署未开启在线支付。{% endif %}
+    </p>
+  </div>
+</footer>

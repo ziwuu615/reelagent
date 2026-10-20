@@ -1,0 +1,116 @@
+# ============================================================================
+# ReelAgent 非敏感配置（ConfigMap）
+#
+# 只放"泄漏了也不致命"的值。任何口令、密钥、DSN 一律进 Secret（见 secret.example.yaml）。
+#
+# 注意：ConfigMap 的值**必须是字符串**，布尔与数字要加引号，
+#      否则 kubectl 会报 "cannot unmarshal number/bool into Go struct field"。
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reelagent-config
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/part-of: reelagent
+data:
+  # ---- 产品标识 ----
+  REEL_ENV: "prod"
+  # 必须与 Ingress 的域名一致（生产校验会检查 https 前缀）
+  REEL_BASE_URL: "https://reelagent.example.com"
+  REEL_PRODUCT_NAME: "ReelAgent"
+  REEL_SUPPORT_EMAIL: "support@example.com"
+
+  # ---- 数据库（连接串在 Secret 里）----
+  REEL_DATABASE__POOL_SIZE: "10"
+  REEL_DATABASE__MAX_OVERFLOW: "20"
+  REEL_DATABASE__POOL_PRE_PING: "true"
+  REEL_DATABASE__POOL_RECYCLE: "1800"
+  REEL_DATABASE__STATEMENT_TIMEOUT_MS: "30000"
+
+  # ---- Redis（连接串在 Secret 里）----
+  REEL_REDIS__ENABLED: "true"
+  REEL_REDIS__SOCKET_TIMEOUT: "2.0"
+
+  # ---- 安全 ----
+  REEL_SECURITY__HTTPS_ONLY: "true"
+  # 生产校验拒绝 "*"，且必须是合法 JSON 数组
+  REEL_SECURITY__ALLOWED_HOSTS: '["reelagent.example.com"]'
+  REEL_SECURITY__ALLOW_SIGNUP: "false"
+  REEL_SECURITY__MIN_PASSWORD_LENGTH: "10"
+  REEL_SECURITY__LOGIN_MAX_ATTEMPTS: "10"
+
+  # ---- 限流 ----
+  REEL_RATE_LIMIT__ENABLED: "true"
+  REEL_RATE_LIMIT__ANONYMOUS_PER_MINUTE: "30"
+  REEL_RATE_LIMIT__USER_PER_MINUTE: "240"
+  REEL_RATE_LIMIT__PROJECT_CREATES_PER_HOUR: "20"
+
+  # ---- Worker ----
+  # 并发要和容器的 CPU/内存 limit 对得上：一个 ffmpeg 合成峰值可占约 1 核 1GB
+  REEL_WORKER__CONCURRENCY: "2"
+  REEL_WORKER__SHOT_CONCURRENCY: "3"
+  REEL_WORKER__POLL_INTERVAL_SECONDS: "2.0"
+  REEL_WORKER__LEASE_SECONDS: "900"
+  REEL_WORKER__HEARTBEAT_SECONDS: "20"
+  REEL_WORKER__MAX_ATTEMPTS: "3"
+  # ⚠ 必须小于 Deployment 的 terminationGracePeriodSeconds（那里是 120s），
+  #   否则滚动更新时正在生成的成片会被 SIGKILL 掐断
+  REEL_WORKER__SHUTDOWN_GRACE_SECONDS: "60"
+
+  # ---- 存储 ----
+  # 【重要】K8s 下默认用 s3，这是**多副本下唯一正确的选择**：
+  #   local 后端要求 api 与 worker 共享同一块盘，而 RWO PVC 只能挂到同一个节点；
+  #   api 扩到 2 副本后很可能分处不同节点，于是出现"worker 写了、api 读不到"的 404。
+  #   所以这里默认 s3；若确实要用 local，见下方注释里的约束（必须单副本 + 共享盘）。
+  # ⚠ 应用本文件前**必须**先填 REEL_STORAGE__S3_BUCKET 与 S3 密钥，
+  #   否则 backend=s3 且桶名为空会在启动时直接报错（表现为 CrashLoopBackOff）。
+  REEL_STORAGE__BACKEND: "s3"
+  REEL_STORAGE__S3_BUCKET: "CHANGE_ME_reelagent-prod"     # ⚠ 必填
+  REEL_STORAGE__S3_REGION: "ap-southeast-1"
+  # REEL_STORAGE__S3_ENDPOINT_URL: "https://minio.example.com"   # R2 / MinIO 才需要
+  # REEL_STORAGE__S3_PUBLIC_BASE_URL: "https://cdn.example.com"   # 配了就直链下载
+  REEL_STORAGE__MAX_UPLOAD_MB: "32"
+  # 引擎临时工作区（挂载点见 deployment，两者必须一致；s3 模式下它是临时空间）
+  REEL_WORKSPACE_DIR: "/app/workspace"
+  # ---- 若坚持 local 存储，替换为下面三行，并同时满足两个约束 ----
+  #   1) api 与 worker 都只跑 1 个副本（HPA 也要删掉或改成 min=max=1）；
+  #   2) 两者挂同一个 PVC，且该 PVC 的 accessMode 允许同时挂载
+  #      （RWO 只有在"同一节点"时才勉强可行，多节点请用 RWX 存储类如 NFS/CephFS）。
+  # REEL_STORAGE__BACKEND: "local"
+  # REEL_STORAGE__LOCAL_DIR: "/app/workspace/storage"
+  # REEL_WORKSPACE_DIR: "/app/workspace"
+
+  # ---- 可观测性 ----
+  REEL_OBSERVABILITY__LOG_FORMAT: "json"
+  REEL_OBSERVABILITY__LOG_LEVEL: "INFO"
+  REEL_OBSERVABILITY__METRICS_ENABLED: "true"
+  REEL_OBSERVABILITY__SLOW_REQUEST_MS: "3000"
+
+  # ---- 供应商（只放非敏感的 provider/model/base_url；Key 在 Secret 里）----
+  REEL_PROVIDERS__ALLOW_BYOK: "true"
+  REEL_PROVIDERS__LLM__PROVIDER: "deepseek"
+  REEL_PROVIDERS__LLM__MODEL: "deepseek-chat"
+  REEL_PROVIDERS__LLM__BASE_URL: "https://api.deepseek.com/v1"
+  REEL_PROVIDERS__IMAGE__PROVIDER: "ark"
+  REEL_PROVIDERS__IMAGE__MODEL: "doubao-seedream-4-0-250828"
+  REEL_PROVIDERS__IMAGE__BASE_URL: "https://ark.cn-beijing.volces.com/api/v3"
+  REEL_PROVIDERS__VIDEO__PROVIDER: "ark"
+  REEL_PROVIDERS__VIDEO__MODEL: "doubao-seedance-1-0-pro-250528"
+  REEL_PROVIDERS__VIDEO__BASE_URL: "https://ark.cn-beijing.volces.com/api/v3"
+  REEL_PROVIDERS__VIDEO__TIMEOUT_SECONDS: "300"
+  REEL_PROVIDERS__VIDEO__MAX_CONCURRENCY: "2"
+  REEL_PROVIDERS__TTS__PROVIDER: "dashscope"
+  REEL_PROVIDERS__TTS__MODEL: "qwen3-tts-flash"
+  REEL_PROVIDERS__TTS__BASE_URL: "https://dashscope.aliyuncs.com/api/v1"
+
+  # ---- 计费开关（密钥在 Secret 里）----
+  REEL_BILLING__ENABLED: "true"
+  REEL_BILLING__CURRENCY: "cny"
+  REEL_BILLING__MARKUP_MULTIPLIER: "3.0"
+
+  # ---- 引擎参数 ----
+  REEL_ASPECT_RATIO: "9:16"
+  REEL_MAX_SHOTS_PER_PROJECT: "12"
+  REEL_JOB_BUDGET_USD: "2.0"

@@ -1,0 +1,120 @@
+# ============================================================================
+# ReelAgent Worker 工作负载（任务执行进程）
+#
+# 与 api 的关键差别：
+#   1. **不监听端口**，没有 HTTP 探针可用 → 用 exec 探针扫 /proc
+#      （镜像里没有 curl/pgrep，Python 是唯一必定存在的工具）；
+#   2. **优雅停机时间更长**：收到 SIGTERM 后要停止领新任务、把在跑的做完，
+#      因此 terminationGracePeriodSeconds 必须 **大于**
+#      REEL_WORKER__SHUTDOWN_GRACE_SECONDS（configmap 里是 60s，这里给 120s）；
+#   3. **多副本天然安全**：任务通过数据库租约（lease）抢占，
+#      两个 worker 不会拿到同一个任务，扩缩容不需要额外协调。
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reelagent-worker
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: reelagent
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 先起新 Pod 再停旧的：扩容新 worker 后，旧 worker 会把在跑任务做完再退
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reelagent
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reelagent
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: reelagent
+    spec:
+      # ⚠ 120s > REEL_WORKER__SHUTDOWN_GRACE_SECONDS(60s)。
+      #   这个值必须留出余量：worker 的 _drain() 会等最久 60s，
+      #   之后才强杀任务；如果这里也设 60s，收尾阶段会被 SIGKILL，
+      #   在生成的成片直接报废，用户要等到租约过期（15 分钟）才能重试。
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: reelagent
+              app.kubernetes.io/component: worker
+      containers:
+        - name: worker
+          image: ghcr.io/CHANGE_ME_owner/reel-agent:1.0.0
+          imagePullPolicy: IfNotPresent
+          # 用 args 覆盖镜像的 CMD，保留 ENTRYPOINT(tini)：
+          # tini 负责回收 ffmpeg 等子进程并正确转发 SIGTERM —— worker 的
+          # 优雅停机完全依赖信号能到达 Python 主循环。
+          args: ["reelagent-worker"]
+          envFrom:
+            - configMapRef:
+                name: reelagent-config
+            - secretRef:
+                name: reelagent-secrets
+          # 无端口、无 Service（worker 不接流量，不需要 readinessProbe）
+          livenessProbe:
+            exec:
+              command: ["python", "/app/scripts/worker_healthcheck.py"]
+            # 周期给宽一点：探针只判断"进程是否还在"，
+            # 真卡死（死锁）由任务租约兜底，不需要靠重启解决
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+            initialDelaySeconds: 20
+          resources:
+            # ⚠ 这里是最容易配错的地方：并发数 × ffmpeg 峰值 = 真实内存需求。
+            #   一个 1080p 合成峰值约 1 CPU / 1GB，worker.concurrency=2 时
+            #   2GB 只是"刚好够"，所以 limit 给到 4GB 留余量。
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # 引擎临时工作区（配置里 REEL_WORKSPACE_DIR=/app/workspace）。
+            # s3 后端下这里只放中间产物，Pod 结束即清空。
+            # local 后端则必须与 api 共享同一块盘（见下方注释与 configmap 说明）。
+            - name: workspace
+              mountPath: /app/workspace
+            # ffmpeg / Pillow / Python 都要写临时目录，只读根文件系统下必须挂一个
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 50Gi      # worker 的中间产物比 api 大，给多一点
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Gi
+        # ---- local 存储方案：api 与 worker 都换成同一个 PVC，
+        #      并把两边副本数都固定为 1（详见 configmap 的存储注释）----
+        # - name: workspace
+        #   persistentVolumeClaim:
+        #     claimName: reelagent-workspace

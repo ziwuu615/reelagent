@@ -1,0 +1,93 @@
+# ============================================================================
+# Docker 构建上下文排除清单
+#
+# 目的有两个：
+#   1) **别把密钥带进镜像**。`.env` 一旦被 COPY 进去，任何能拉镜像的人
+#      都能读到数据库口令与供应商 Key（镜像层删不掉，历史层里永远在）。
+#   2) 缩小上下文，构建更快（.venv 动辄几百 MB，传上去纯属浪费）。
+# 注意：`README.md`、`pyproject.toml`、`scripts/` 是构建**需要**的，
+#      不要因为"文件太杂"把它们排除掉。
+# ============================================================================
+
+# ---- 密钥与本地配置：最高优先级 ----
+# `.env.*` 连示例文件一起排除：它们对运行没有用，少一类"意外泄漏面"
+.env
+.env.*
+*.pem
+*.key
+.pylibs/
+
+# ---- 版本控制与 CI ----
+.git
+.gitignore
+.gitattributes
+.github
+.pre-commit-config.yaml
+*.md
+# README 不能排除：setuptools 构建时要把它的内容写进包元数据
+!README.md
+
+# ---- Python 虚拟环境与构建缓存 ----
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+.tox
+.nox
+
+# ---- 运行期产物（体积大且与镜像无关；线上由卷提供）----
+workspace
+runs
+out
+data
+*.mp4
+*.mov
+*.gif
+*.wav
+*.mp3
+*.png
+*.jpg
+*.jpeg
+
+# ---- 本地开发残留 ----
+.tmp
+tmp
+tests/_tmp
+# 测试代码不进镜像（Dockerfile 只 COPY reelagent/reelagent_cloud/scripts）。
+# 要在容器里跑测试请用 Dockerfile.dev。
+tests
+docs
+runs/
+*.log
+*.db
+*.sqlite3
+.pytest_cache/
+pytest-cache-files-*
+# pip 在项目根目录留下的临时构建目录（既脏又常带只读权限，
+# 混进构建上下文会连累 ruff/mypy 报 PermissionError）
+pip-build-env-*
+pip-build-tracker-*
+pip-ephem-wheel-cache-*
+pip-install-*
+pip-modern-metadata-*
+pip-target-*
+pip-unpack-*
+pip-cache-*
+
+# ---- 编辑器 / 系统 ----
+.idea
+.vscode
+.DS_Store
+Thumbs.db

@@ -1,0 +1,68 @@
+# ============================================================================
+# ReelAgent API 水平自动扩缩容（HPA）
+#
+# 为什么只给 api 配 HPA，不给 worker：
+#   api 是无状态请求响应型服务，CPU/内存随流量线性变化，HPA 很好用。
+#   worker 的瓶颈是**队列深度**而不是 CPU：任务可能是"等视频供应商回调"
+#   这种不吃 CPU 的等待，CPU 打不满但队列已经积压，HPA 看着 CPU 就是不扩，
+#   结果任务越堆越多。要自动扩 worker 应该按队列深度（任务表里 pending 的
+#   行数）来扩，方案是 KEDA 的 postgresql scaler，或自建指标适配器。
+#   → 在没接 KEDA 之前，worker 请手工 `kubectl scale deployment/reelagent-worker
+#     --replicas=N`，或按时间段用 CronJob 定时调整。
+#
+# 前置条件：集群装了 metrics-server，否则 HPA 读不到 CPU/内存指标，
+# 会一直显示 <unknown>/70% 并且不扩缩。
+# ============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reelagent-api
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: reelagent
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reelagent-api
+  # min 2 是为了滚动更新与节点故障时始终有可用副本；
+  # 想省钱也不能设 1——单副本发布期间会让服务短暂完全不可用。
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 相对 requests(250m) 的利用率：70% 约等于 175m 触发扩容。
+          # 阈值定得偏低是因为请求里有不少等待供应商 API 的 IO 时间。
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          # 内存超过 requests(512Mi) 的 80% 也扩：上传/渲染会短时吃内存
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      # 突发流量要能快速顶上：15s 一次评估，一次最多翻倍
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+      selectPolicy: Max
+    scaleDown:
+      # 缩容要慢：避免指标抖动导致副本数来回跳（抖动会顺带打爆数据库连接池）
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

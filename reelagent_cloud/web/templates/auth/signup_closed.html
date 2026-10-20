@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% set layout = 'auth' %}
+{% block title %}暂未开放注册 · {{ product_name }}{% endblock %}
+{% block description %}{{ product_name }} 当前处于受邀阶段，暂未开放公开注册。可邮件联系获取邀请。{% endblock %}
+
+{% block auth_content %}
+<aside class="auth-aside">
+  <a class="brand" href="/">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+        <rect x="1.5" y="5.5" width="21" height="21" rx="5.5" stroke="currentColor" stroke-width="2"/>
+        <path d="M22.5 14.2 30 9.4v13.2l-7.5-4.8z" fill="currentColor" opacity=".85"/>
+      </svg>
+    </span>
+    <span class="brand-text"><strong>{{ product_name }}</strong><small>AI 短视频生成平台</small></span>
+  </a>
+
+  <div>
+    <h2>当前处于受邀阶段</h2>
+    <p class="lede">
+      为了保证生成质量与队列稳定，我们暂时关闭了公开注册。已有账号的用户不受影响，可以正常登录并生成成片。
+    </p>
+    <ul class="auth-points">
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z" stroke="currentColor" stroke-width="1.8"/><path d="m4 7 8 6 8-6" stroke="currentColor" stroke-width="1.8"/></svg>
+        <span>申请邀请：邮件至 {{ support_email }}，说明用途与预计用量</span>
+      </li>
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>已收到邀请码？重新打开注册页填写邀请码即可</span>
+      </li>
+    </ul>
+  </div>
+
+  <p class="muted small">状态与可用性请见 <a href="/status" style="color:#9fb4ff">状态页</a>。</p>
+</aside>
+
+<div class="auth-main">
+  <div class="auth-card">
+    <h1>注册暂未开放</h1>
+    <p class="lede">本部署已关闭公开注册，请使用邀请码或联系管理员开通。</p>
+
+    <div class="alert alert-warn mt-3">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>我们会在容量允许后重新开放注册，届时会通过状态页与邮件通知。</span>
+    </div>
+
+    <div class="btn-row mt-4" style="flex-direction: column; align-items: stretch">
+      <a class="btn btn-primary btn-block btn-lg" href="/login">已有账号，去登录</a>
+      <a class="btn btn-ghost btn-block" href="mailto:{{ support_email }}?subject=%E7%94%B3%E8%AF%B7%20{{ product_name }}%20%E9%82%80%E8%AF%B7%E7%A0%81">
+        申请邀请码
+      </a>
+      <a class="btn btn-ghost btn-block" href="/pricing">查看定价</a>
+    </div>
+
+    <p class="auth-legal mt-4">
+      企业批量开通、私有化部署与合规咨询，请直接联系
+      <a href="mailto:{{ support_email }}">{{ support_email }}</a>。
+    </p>
+    <p class="auth-legal"><a href="/">← 返回首页</a></p>
+  </div>
+</div>
+{% endblock %}

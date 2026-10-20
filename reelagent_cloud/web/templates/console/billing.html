@@ -1,0 +1,283 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}套餐与账单 · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <h1>套餐与账单</h1>
+    <p class="lede">
+      当前套餐 <strong>{{ plan.name }}</strong> · {{ plan.tagline }}
+      {% if plan_summary.cancel_at_period_end %}· 已设置为到期不续费{% endif %}
+    </p>
+  </div>
+  <div class="btn-row">
+    {% if billing_enabled and subscription and subscription.stripe_customer_id %}
+      <form method="post" action="/app/billing/portal" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn btn-ghost" type="submit">管理支付方式与发票</button>
+      </form>
+    {% endif %}
+    <a class="btn btn-primary" href="/app/projects/new">新建成片</a>
+  </div>
+</div>
+
+{% if not billing_enabled %}
+  <div class="alert alert-info" role="alert">
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.6v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>
+      当前部署未开启在线支付，页面上的升级按钮暂不可用。
+      需要开通套餐或购买点数包，请邮件联系 {{ support_email }}，注明组织名称与所需档位。
+    </span>
+  </div>
+{% endif %}
+
+{# 用量与账期概览 #}
+<div class="grid grid-4 mb-4">
+  <div class="stat">
+    <p class="stat-label">当前套餐</p>
+    <p class="stat-value" style="font-size:1.375rem">{{ plan.name }}</p>
+    <p class="stat-hint">{{ plan.price_cny|money }}{% if not plan.is_free %} / 月{% endif %} · 每周期 {{ plan.monthly_credits|credits }} 点</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">可用额度</p>
+    <p class="stat-value">{{ org.credits_balance|credits }}<span>点</span></p>
+    <p class="stat-hint">本周期已发放 {{ org.credits_granted_this_period|credits }} 点</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">订阅状态</p>
+    <p class="stat-value" style="font-size:1.25rem">
+      {% set status = plan_summary.status %}{% set label = none %}
+      {% include 'partials/badge.html' %}
+    </p>
+    <p class="stat-hint">
+      {% if plan.is_free and not subscription %}未订阅付费套餐{% else %}由 Stripe 统一管理{% endif %}
+    </p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">当前账期</p>
+    <p class="stat-value" style="font-size:1.125rem">
+      {% if subscription and subscription.current_period_end %}
+        {{ subscription.current_period_end|dt('%Y-%m-%d') }}
+      {% else %}
+        —
+      {% endif %}
+    </p>
+    <p class="stat-hint">
+      {% if subscription and subscription.cancel_at_period_end %}
+        到期后不再续费
+      {% elif subscription and subscription.current_period_start %}
+        自 {{ subscription.current_period_start|dt('%Y-%m-%d') }} 起
+      {% else %}
+        体验版无固定账期
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+{# 套餐选择 #}
+<section class="card mb-4">
+  <div class="card-head">
+    <div>
+      <h3 class="card-title">选择套餐</h3>
+      <p class="card-sub">
+        升级立即生效；订阅额度每周期重置，单独购买的点数包不过期。生成失败一律全额退还。
+      </p>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="grid plan-grid plan-grid-4">
+      {% for item in all_plans %}
+        {% set is_current = item.tier.value == plan_summary.tier %}
+        <article class="plan{% if is_current %} plan-featured{% endif %}">
+          {% if is_current %}<span class="plan-flag">当前套餐</span>{% endif %}
+          <p class="plan-name">{{ item.name }}</p>
+          <p class="plan-tagline">{{ item.tagline }}</p>
+          <p class="plan-price">
+            {% if item.is_free %}
+              <strong>免费</strong>
+            {% else %}
+              <strong>{{ item.price_cny|money }}</strong><span>/ 月</span>
+            {% endif %}
+          </p>
+          <p class="plan-credits">每周期 {{ item.monthly_credits|credits }} 点 · 最多 {{ item.max_shots_per_project }} 镜</p>
+
+          <ul class="plan-list">
+            {% for line in item.highlights %}
+              <li>
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>{{ line }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+
+          <div class="plan-cta">
+            {% if is_current %}
+              <button class="btn btn-soft btn-block" type="button" disabled>当前正在使用</button>
+            {% elif item.is_free %}
+              <p class="muted small mb-0 center">降级请联系支持，避免影响进行中的任务</p>
+            {% elif billing_enabled %}
+              <form method="post" action="/app/billing/checkout" data-lock>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="tier" value="{{ item.tier.value }}">
+                <button class="btn btn-primary btn-block" type="submit">
+                  {% if item.price_cny > plan.price_cny %}升级到{% else %}切换到{% endif %}{{ item.name }}
+                </button>
+              </form>
+            {% else %}
+              <a class="btn btn-ghost btn-block" href="mailto:{{ support_email }}?subject=%E5%BC%80%E9%80%9A{{ item.name }}">邮件开通</a>
+            {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<div class="grid grid-2-1">
+  {# 订阅详情 #}
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title">订阅详情</h3>
+        <p class="card-sub">由支付服务商统一托管，我们不存储任何卡号信息</p>
+      </div>
+      {% if subscription and subscription.is_active %}
+        <span class="badge badge-ok"><i class="dot"></i>生效中</span>
+      {% endif %}
+    </div>
+    <div class="card-body">
+      {% if subscription %}
+        <dl class="meta-list">
+          <div class="meta-row"><dt>订阅编号</dt><dd class="mono">{{ subscription.id }}</dd></div>
+          <div class="meta-row"><dt>套餐档位</dt><dd>{{ plan_map[subscription.plan].name if subscription.plan in plan_map else subscription.plan.value }}</dd></div>
+          <div class="meta-row">
+            <dt>状态</dt>
+            <dd>
+              {% set status = subscription.status %}{% set label = none %}
+              {% include 'partials/badge.html' %}
+            </dd>
+          </div>
+          <div class="meta-row"><dt>当前周期开始</dt><dd>{{ subscription.current_period_start|dt }}</dd></div>
+          <div class="meta-row"><dt>当前周期结束</dt><dd>{{ subscription.current_period_end|dt }}</dd></div>
+          <div class="meta-row"><dt>到期不续费</dt><dd>{{ '是' if subscription.cancel_at_period_end else '否' }}</dd></div>
+          {% if subscription.canceled_at %}
+            <div class="meta-row"><dt>取消时间</dt><dd>{{ subscription.canceled_at|dt }}</dd></div>
+          {% endif %}
+          {% if subscription.trial_end %}
+            <div class="meta-row"><dt>试用结束</dt><dd>{{ subscription.trial_end|dt }}</dd></div>
+          {% endif %}
+          <div class="meta-row"><dt>成片水印</dt><dd>{{ '有' if org.watermark else '无' }}</dd></div>
+        </dl>
+
+        {% if subscription.status.value in ['past_due', 'unpaid'] %}
+          <div class="alert alert-warn alert-inline" role="alert">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>最近一次扣款未成功，请更新支付方式；额度将在扣款成功后恢复发放。</span>
+          </div>
+        {% endif %}
+      {% else %}
+        <div class="empty" style="padding: 26px 10px">
+          <p class="empty-title">当前使用体验版</p>
+          <p class="muted small">没有绑定支付方式，也不需要绑定。想升级时在上方选择套餐即可。</p>
+        </div>
+      {% endif %}
+    </div>
+    <div class="card-foot">
+      <span class="muted small">
+        {% if billing_enabled %}
+          账单、发票与支付方式变更都在支付服务商的安全页面完成。
+        {% else %}
+          需要纸质发票或对公转账，请联系 {{ support_email }}。
+        {% endif %}
+      </span>
+      {% if billing_enabled and subscription and subscription.stripe_customer_id %}
+        <form method="post" action="/app/billing/portal" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-soft btn-sm" type="submit">打开客户门户</button>
+        </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {# 额度与购买说明 #}
+  <div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">点数怎么用</h3>
+          <p class="card-sub">透明计费，逐镜可查</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <dl class="meta-list">
+          <div class="meta-row"><dt>关键帧</dt><dd>按张计点</dd></div>
+          <div class="meta-row"><dt>视频片段</dt><dd>按镜头时长与档位计点</dd></div>
+          <div class="meta-row"><dt>配音</dt><dd>按字数计点</dd></div>
+          <div class="meta-row"><dt>剧本与评测</dt><dd>按调用次数计点</dd></div>
+          <div class="meta-row"><dt>失败退还</dt><dd><span class="badge badge-ok"><i class="dot"></i>全额</span></dd></div>
+        </dl>
+        <p class="muted small mt-3 mb-0">
+          想按供应商成本自行核算？专业版与工作室版支持自带密钥（BYOK），
+          可在<a href="/app/settings">组织设置</a>中配置。
+        </p>
+      </div>
+    </section>
+
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">费用与发票</h3>
+          <p class="card-sub">最近一笔支付记录</p>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="/app/usage">全部流水</a>
+      </div>
+      <div class="card-body">
+        {% if ledger %}
+          <dl class="meta-list">
+            {% for entry in ledger %}
+              <div class="meta-row">
+                <dt>{{ entry.created_at|dt('%m-%d %H:%M') }}</dt>
+                <dd>
+                  {{ entry.description or entry.kind.value }}
+                  <span class="{{ 'amount-pos' if entry.amount > 0 else 'amount-neg' }}">{{ '+' if entry.amount > 0 else '' }}{{ entry.amount|credits }}</span>
+                </dd>
+              </div>
+            {% endfor %}
+          </dl>
+        {% else %}
+          <p class="muted small mb-0">还没有额度变动记录。</p>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</div>
+
+<section class="card mt-4">
+  <div class="card-body">
+    <h3 class="card-title">计费常见问题</h3>
+    <div class="faq mt-3">
+      <details class="faq-item">
+        <summary>订阅额度会在月底结转吗？</summary>
+        <div class="faq-body">不会。订阅套餐的月度额度在周期结束时重置，未使用的部分不结转到下个周期；单独购买的点数包不设过期时间，可以一直用。</div>
+      </details>
+      <details class="faq-item">
+        <summary>升级后额度怎么算？</summary>
+        <div class="faq-body">升级立即生效，并按剩余周期比例折算新档位的额度补发到账，避免你为已过去的周期重复付费。</div>
+      </details>
+      <details class="faq-item">
+        <summary>可以随时取消吗？</summary>
+        <div class="faq-body">可以。取消后服务持续到当前周期结束，期间不再自动续费；如需在到期前停止，可在客户门户中操作，已产生的周期费用按行业惯例不按比例退还。</div>
+      </details>
+      <details class="faq-item">
+        <summary>任务失败了，点数会退吗？</summary>
+        <div class="faq-body">会。因模型报错、渲染失败或超时导致的任务失败，本次预扣点数全额退还，并在用量页留下一条「失败退还」流水，可直接核对。</div>
+      </details>
+      <details class="faq-item">
+        <summary>需要企业采购与发票怎么办？</summary>
+        <div class="faq-body">邮件联系 {{ support_email }}，注明组织名称、所需档位与开票信息，我们会在 1 个工作日内回复。</div>
+      </details>
+    </div>
+  </div>
+</section>
+{% endblock %}

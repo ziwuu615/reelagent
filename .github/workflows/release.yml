@@ -1,0 +1,261 @@
+# ============================================================================
+# ReelAgent 发布流水线
+#
+# 触发：推送 `v*` 形式的 tag（例如 v1.0.0、v1.2.3-rc1）
+#
+# 产出：
+#   1) 多架构镜像推送到 GHCR（ghcr.io/<owner>/<repo>），用内置 GITHUB_TOKEN 认证；
+#   2) wheel + sdist 发布到 PyPI（**优先走 Trusted Publishing**，无需长期密钥）；
+#   3) 生成 GitHub Release，自动汇总 PR 说明并附上构建产物。
+#
+# 发布前请确认：
+#   * tag 上的代码已通过 CI（可以在 tag 前先跑一遍 main 分支的 CI）；
+#   * pyproject.toml 里的 version 与 tag 一致 —— 步骤里会做这项校验。
+# ============================================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# 发布过程必须串行，中途取消会留下"镜像推了一半"的半成品状态
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # 发布前校验：版本号一致性 + 测试通过。
+  # 宁可发布失败，也不要让一个 tag 指向坏代码。
+  # ------------------------------------------------------------------ #
+  verify:
+    name: 发布前校验
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # Release 备注需要完整历史来生成
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 安装项目与开发依赖
+        run: pip install -e ".[dev,s3,sentry]"
+
+      - name: 校验 tag 与 pyproject 版本一致
+        id: version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")"
+          echo "tag=$tag_version  pyproject=$pkg_version"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag（$tag_version）与 pyproject.toml 的 version（$pkg_version）不一致，请先改版本号再打 tag"
+            exit 1
+          fi
+          echo "version=$pkg_version" >> "$GITHUB_OUTPUT"
+
+      - name: 运行测试
+        env:
+          REEL_ENV: dev
+          REEL_DATABASE__URL: sqlite+aiosqlite:///./tests/_tmp/release.db
+        run: |
+          mkdir -p tests/_tmp
+          python -m pytest
+
+  # ------------------------------------------------------------------ #
+  # 镜像：推送到 GHCR。linux/amd64 + linux/arm64 双架构，
+  # 让 Apple Silicon 与 ARM 云主机都能直接用。
+  # ------------------------------------------------------------------ #
+  image:
+    name: 构建并推送镜像到 GHCR
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write          # 推送 GHCR 必需
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Buildx（多架构）
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN 是内置令牌，无需额外配置 secret
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 计算镜像名（GHCR 要求全小写）
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: 生成镜像标签与 OCI 元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=ReelAgent
+            org.opencontainers.image.description=AI 短视频创作 Agent 平台
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+  # ------------------------------------------------------------------ #
+  # PyPI：Trusted Publishing（OIDC）——推荐做法，仓库里不放任何长期密钥。
+  #
+  # 一次性配置（在 PyPI 网页端做，不是在这里）：
+  #   PyPI → 账号 → Publishing → Add a new pending publisher
+  #     Owner:            <GitHub 用户名或组织>
+  #     Repository:       reel-agent
+  #     Workflow name:    release.yml
+  #     Environment:      pypi
+  # 配好之后本作业即可免密发布。
+  #
+  # 若暂时只能用 API Token：先在 GitHub 仓库里加 secret `PYPI_API_TOKEN`，
+  # 然后把下面 with: 里的 password 换成 ${{ secrets.PYPI_API_TOKEN }}。
+  # ------------------------------------------------------------------ #
+  pypi:
+    name: 发布到 PyPI
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/reelagent
+    permissions:
+      id-token: write          # OIDC 令牌，Trusted Publishing 必需
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 构建 sdist 与 wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: 校验产物元数据
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+
+      - name: 保存产物（供 release 作业使用）
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: 上传到 PyPI（Trusted Publishing，无需 password）
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # password: ${{ secrets.PYPI_API_TOKEN }}   # 仅当无法使用 OIDC 时启用
+          # PEP 740 制品签名（供应链安全）目前**只对公开仓库**生效，
+          # 私有仓库开了会直接报错。仓库公开后可把这里改成 true。
+          attestations: false
+
+  # ------------------------------------------------------------------ #
+  # GitHub Release：汇总 PR 生成变更说明，并附上 dist 产物。
+  # ------------------------------------------------------------------ #
+  release:
+    name: 生成 GitHub Release
+    needs: [verify, pypi, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # 创建 Release 必需
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: 生成发布说明并创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          # 预发布版本（v1.2.3-rc1 之类）自动标记为 prerelease
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+
+          # 说明分两段：手写的"怎么用" + 自动汇总的"改了什么"。
+          # 这里用 git log 自己汇总而不用 `gh release create --generate-notes`：
+          # 后者与 --notes-file 的组合行为在各版本 gh 上不一致，容易在发版当天才炸。
+          {
+            echo "## 容器镜像"
+            echo ""
+            echo '```'
+            echo "docker pull ${IMAGE}:${VERSION}"
+            echo '```'
+            echo ""
+            echo "## 安装"
+            echo ""
+            echo '```bash'
+            echo "pip install reelagent==${VERSION}"
+            echo '```'
+            echo ""
+            echo "## 本次变更"
+            echo ""
+          } > release-notes.md
+
+          prev_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$prev_tag" ]; then
+            echo "（自 ${prev_tag} 以来）"
+            git log --no-merges --pretty=format:'- %s (%h)' "${prev_tag}..${GITHUB_REF_NAME}" >> release-notes.md
+          else
+            echo "（首个版本）"
+            git log --no-merges --pretty=format:'- %s (%h)' "${GITHUB_REF_NAME}" >> release-notes.md
+          fi
+          echo "" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "**完整变更**：https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag:-$(git rev-list --max-parents=0 HEAD | tail -1)}...${GITHUB_REF_NAME}" >> release-notes.md
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "ReelAgent ${VERSION}" \
+            --notes-file release-notes.md \
+            $prerelease \
+            dist/*

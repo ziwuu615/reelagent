@@ -1,0 +1,196 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}用量与额度 · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <h1>用量与额度</h1>
+    <p class="lede">
+      账本是只追加的事实记录，余额是它的快照。两者必须相等——不相等就是有 bug，这一页用来让这件事随时可查。
+    </p>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-ghost" href="/app/billing">套餐与账单</a>
+    <a class="btn btn-primary" href="/app/projects/new">新建成片</a>
+  </div>
+</div>
+
+{# 额度概览 #}
+<div class="grid grid-4 mb-4">
+  <div class="stat">
+    <p class="stat-label">当前可用额度</p>
+    <p class="stat-value">{{ org.credits_balance|credits }}<span>点</span></p>
+    <p class="stat-hint">来自订阅发放与点数包</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">本周期已发放</p>
+    <p class="stat-value">{{ org.credits_granted_this_period|credits }}<span>点</span></p>
+    <p class="stat-hint">套餐每周期 {{ plan.monthly_credits|credits }} 点</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">账本累计变动</p>
+    <p class="stat-value">{{ reconcile.ledger_sum|credits }}<span>点</span></p>
+    <p class="stat-hint">含赠送、发放、消耗与退还</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">当期开始</p>
+    <p class="stat-value" style="font-size:1.125rem">{{ org.period_started_at|dt('%Y-%m-%d') }}</p>
+    <p class="stat-hint">
+      {% if plan_summary.current_period_end %}
+        至 {{ plan_summary.current_period_end|dt('%Y-%m-%d') }}
+      {% else %}
+        体验版无固定账期
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+{# 对账状态 #}
+<section class="card mb-4">
+  <div class="card-head">
+    <div>
+      <h3 class="card-title">额度对账</h3>
+      <p class="card-sub">账本求和与余额快照的一致性检查，每次打开本页都会重新计算</p>
+    </div>
+    <span class="badge badge-{{ 'ok' if reconcile.consistent else 'bad' }}">
+      <i class="dot"></i>{{ '账实相符' if reconcile.consistent else '存在差异' }}
+    </span>
+  </div>
+  <div class="card-body">
+    <div class="grid grid-3">
+      <div>
+        <p class="muted small mb-0">账本求和</p>
+        <p class="ink" style="font-size:1.25rem;font-weight:620">{{ reconcile.ledger_sum|credits }} 点</p>
+      </div>
+      <div>
+        <p class="muted small mb-0">余额快照</p>
+        <p class="ink" style="font-size:1.25rem;font-weight:620">{{ reconcile.balance|credits }} 点</p>
+      </div>
+      <div>
+        <p class="muted small mb-0">差异</p>
+        <p class="ink" style="font-size:1.25rem;font-weight:620">
+          {{ '+' if reconcile.drift > 0 else '' }}{{ reconcile.drift|credits }} 点
+        </p>
+      </div>
+    </div>
+
+    {% if not reconcile.consistent %}
+      <div class="alert alert-error alert-inline" role="alert">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>
+          检测到额度差异，请把本页截图并发给 {{ support_email }}，我们会立即核对并修正。
+          差异不会影响你已购买的点数。
+        </span>
+      </div>
+    {% else %}
+      <p class="muted small mt-3 mb-0">
+        对账通过。订阅周期结束时未使用的订阅额度会归零，单独购买的点数包不过期。
+      </p>
+    {% endif %}
+  </div>
+</section>
+
+{# 流水 #}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h3 class="card-title">额度流水</h3>
+      <p class="card-sub">每笔变动都带变动后余额，按时间倒序</p>
+    </div>
+    <div class="btn-row">
+      {# 说明：/app/usage 目前只接受 page 参数，这里只做类型图例，不伪造筛选行为 #}
+      {% set kind_names = {
+        'signup_grant': '注册赠送', 'plan_grant': '周期发放', 'purchase': '点数包购买',
+        'consume': '生成消耗', 'refund': '失败退还', 'adjustment': '人工调整', 'expire': '过期作废'
+      } %}
+      {% for kind in ledger_kinds %}
+        <span class="tag">{{ kind_names.get(kind, kind) }}</span>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if entries %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">时间</th>
+            <th scope="col">类型</th>
+            <th scope="col">说明</th>
+            <th scope="col">关联对象</th>
+            <th scope="col" class="num">变动</th>
+            <th scope="col" class="num">变动后余额</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in entries %}
+            <tr>
+              <td class="tight">
+                <span class="cell-title">{{ entry.created_at|dt }}</span>
+                <span class="cell-sub">{{ entry.created_at|relative }}</span>
+              </td>
+              <td><span class="tag">{{ kind_names.get(entry.kind.value, entry.kind.value) }}</span></td>
+              <td>
+                <span class="cell-title">{{ entry.description or '—' }}</span>
+                {% if entry.external_ref %}<span class="cell-sub mono">{{ entry.external_ref }}</span>{% endif %}
+              </td>
+              <td>
+                {% if entry.project_id %}
+                  <a class="mono small" href="/app/projects/{{ entry.project_id }}">{{ entry.project_id }}</a>
+                {% elif entry.job_id %}
+                  <span class="mono small">{{ entry.job_id }}</span>
+                {% else %}
+                  <span class="muted small">—</span>
+                {% endif %}
+              </td>
+              <td class="num {{ 'amount-pos' if entry.amount > 0 else 'amount-neg' }}">
+                {{ '+' if entry.amount > 0 else '' }}{{ entry.amount|credits }}
+              </td>
+              <td class="num">{{ entry.balance_after|credits }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card-foot">
+      <span class="muted small">第 {{ page }} 页 · 本页 {{ entries|length }} 条</span>
+      <div class="pager-links">
+        {% if page > 1 %}
+          <a href="/app/usage?page={{ page - 1 }}">上一页</a>
+        {% else %}
+          <span class="is-disabled">上一页</span>
+        {% endif %}
+        <span class="is-current">{{ page }}</span>
+        {% if entries|length >= 30 %}
+          <a href="/app/usage?page={{ page + 1 }}">下一页</a>
+        {% else %}
+          <span class="is-disabled">下一页</span>
+        {% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div class="card-body">
+      <div class="empty">
+        <div class="empty-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24" width="22" height="22"><path d="M5 19V9m4.7 10V5M14.3 19v-7M19 19v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        {% if page > 1 %}
+          <p class="empty-title">这一页没有记录</p>
+          <p class="muted">翻到上一页查看更早的流水。</p>
+          <a class="btn btn-ghost" href="/app/usage?page={{ page - 1 }}">上一页</a>
+        {% else %}
+          <p class="empty-title">还没有额度变动</p>
+          <p class="muted">注册赠送、套餐发放与生成消耗都会记录在这里。</p>
+          <a class="btn btn-primary" href="/app/projects/new">新建第一条成片</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+</section>
+
+<p class="muted small mt-3">
+  需要用于报销的用量报表或发票，请邮件联系 {{ support_email }}，注明组织名称与账期。
+</p>
+{% endblock %}

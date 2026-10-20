@@ -1,0 +1,23 @@
+# 统一换行符：仓库内一律 LF。
+# 本项目在 Windows 上开发，如果不显式规定，core.autocrlf 会把提交内容
+# 变成 CRLF —— 在 Linux 容器里运行时会让 shell 脚本因  报错，
+# 也是跨平台协作时最常见的在我机器上是好的问题来源。
+* text=auto eol=lf
+
+# 这些文件类型必须保持二进制原样，不能被换行符转换碰
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.wav binary
+*.woff binary
+*.woff2 binary
+
+# Windows 侧的批处理保留 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 锁文件与生成物不做 diff
+*.lock linguist-generated=true

@@ -1,0 +1,32 @@
+"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+
+变更说明（请务必填写）：
+    - 为什么做这次变更（业务背景），而不只是「改了什么」
+    - 是否可逆？回滚会遇到什么问题？
+    - 大表变更是否会上锁？预计耗时？是否需要分批/在线执行？
+    - 是否需要配套的数据回填、索引重建或应用侧灰度？
+"""
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+${imports if imports else ""}
+
+revision: str = ${repr(up_revision)}
+down_revision: str | None = ${repr(down_revision)}
+branch_labels: str | Sequence[str] | None = ${repr(branch_labels)}
+depends_on: str | Sequence[str] | None = ${repr(depends_on)}
+
+
+def upgrade() -> None:
+    ${upgrades if upgrades else "pass"}
+
+
+def downgrade() -> None:
+    ${downgrades if downgrades else "pass"}

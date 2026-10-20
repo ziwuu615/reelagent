@@ -1,0 +1,97 @@
+# ============================================================================
+# Dependabot 依赖更新
+#
+# 策略：每周一次、错开时间、分组提交 —— 目的是让"依赖更新"这件事
+#      变成可以随手点合并的小 PR，而不是某天突然砸下来一个 40 个包的大升级。
+# ============================================================================
+version: 2
+updates:
+  # ---- Python 依赖（pyproject.toml）----
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      # 带上前缀，方便在 Release 备注里按类别汇总
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      # 同一"家族"的包合并成一个 PR：它们本来就该一起升，
+      # 拆开反而会出现"升了 SQLAlchemy 没升 alembic"的中间态。
+      ai-providers:
+        patterns:
+          - "openai*"
+          - "httpx*"
+          - "aioboto3*"
+      web-stack:
+        patterns:
+          - "fastapi*"
+          - "uvicorn*"
+          - "starlette*"
+          - "jinja2*"
+          - "python-multipart*"
+      database:
+        patterns:
+          - "SQLAlchemy*"
+          - "alembic*"
+          - "asyncpg*"
+          - "aiosqlite*"
+          - "greenlet*"
+      lint-and-test:
+        patterns:
+          - "ruff*"
+          - "mypy*"
+          - "pytest*"
+          - "respx*"
+          - "coverage*"
+      # 其余零散依赖走一个兜底组，避免每个小包开一个 PR
+      minor-and-patch:
+        patterns: ["*"]
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # 大版本升级往往含破坏性变更，交给人手动评估，不要让机器人自动提
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ---- GitHub Actions 自身 ----
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      # actions 的升级基本无风险，一次性合并成一个 PR 即可
+      actions:
+        patterns: ["*"]
+
+  # ---- 基础镜像（官方镜像升一版就可能修复 CVE，值得跟）----
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "build(deps)"

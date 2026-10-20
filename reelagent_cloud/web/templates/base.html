@@ -1,0 +1,58 @@
+{# 全站基础布局：head / 导航 / flash / 内容 / 页脚 五个区块。
+
+   注意：Jinja 不允许同名 block 出现两次，因此三种外壳各自使用唯一的 block 名：
+     - layout='site'    ->{% block site_content %}
+     - layout='console' ->{% block console_content %}
+     - layout='auth'    ->{% block auth_content %}
+   子模板只需覆盖与自己 layout 对应的那一个 block。 #}
+{% set layout = layout|default('site') %}
+{% set nav_key = nav_key|default(nav|default('')) %}
+{% set principal = principal|default(none) %}
+{% set csrf_token = csrf_token|default('') %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ product_name }}{% endblock %}</title>
+  <meta name="description" content="{% block description %}{{ product_name }} —— 把一段文字变成成片的分镜级 AI 短视频生成平台。{% endblock %}">
+  {# CSRF：双提交 Cookie。表单里写隐藏字段，XHR 请求由 app.js 读这里放进请求头。 #}
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="csrf-header" content="{{ settings.security.csrf_header }}">
+  <meta name="csrf-cookie" content="{{ settings.security.csrf_cookie }}">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="layout-{{ layout }}" data-nav="{{ nav_key }}">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  {% if layout == 'auth' %}
+    <main id="main" class="auth-shell">
+      {% include 'partials/flash.html' %}
+      {% block auth_content %}{% endblock %}
+    </main>
+  {% elif layout == 'console' %}
+    {% include 'partials/nav.html' %}
+    <div class="app-shell">
+      {% include 'partials/sidebar.html' %}
+      <main id="main" class="app-main">
+        <div class="container container-wide">
+          {% include 'partials/flash.html' %}
+          {% block console_content %}{% endblock %}
+        </div>
+      </main>
+    </div>
+  {% else %}
+    {% include 'partials/nav.html' %}
+    <main id="main">
+      {% include 'partials/flash.html' %}
+      {% block site_content %}{% endblock %}
+    </main>
+    {% include 'partials/footer.html' %}
+  {% endif %}
+
+  <script src="/static/js/app.js" defer></script>
+  {% block body_extra %}{% endblock %}
+</body>
+</html>

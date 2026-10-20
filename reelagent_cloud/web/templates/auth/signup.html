@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% set layout = 'auth' %}
+{% block title %}注册 · {{ product_name }}{% endblock %}
+{% block description %}注册 {{ product_name }}，免费获得 {{ plan_map['free'].monthly_credits }} 点额度，足够生成一条完整成片。{% endblock %}
+
+{% block auth_content %}
+<aside class="auth-aside">
+  <a class="brand" href="/">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+        <rect x="1.5" y="5.5" width="21" height="21" rx="5.5" stroke="currentColor" stroke-width="2"/>
+        <path d="M22.5 14.2 30 9.4v13.2l-7.5-4.8z" fill="currentColor" opacity=".85"/>
+      </svg>
+    </span>
+    <span class="brand-text"><strong>{{ product_name }}</strong><small>AI 短视频生成平台</small></span>
+  </a>
+
+  <div>
+    <h2>先跑通一条完整成片</h2>
+    <p class="lede">注册即得 {{ plan_map['free'].monthly_credits|credits }} 点额度，够一条 6 镜成片。不需要信用卡。</p>
+    <ul class="auth-points">
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>自动拆解剧本与分镜，输出结构化镜头表</span>
+      </li>
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>五种风格预设，竖屏 / 横屏 / 方屏任选</span>
+      </li>
+      <li>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>生成失败自动全额退还额度</span>
+      </li>
+    </ul>
+  </div>
+
+  <p class="muted small">企业批量开通与合规咨询：{{ support_email }}</p>
+</aside>
+
+<div class="auth-main">
+  <div class="auth-card">
+    <h1>创建账号</h1>
+    <p class="lede">填完下面的信息即可开始生成，全程不超过 1 分钟。</p>
+
+    {% if error %}
+      <div class="form-error mt-3" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <div class="grant-note mt-3">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 5 6.6v5.6c0 4 2.9 7 7 8.3 4.1-1.3 7-4.3 7-8.3V6.6L12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      <span>注册赠送 <strong>{{ plan_map['free'].monthly_credits|credits }} 点</strong>，可用于 {{ plan_map['free'].max_shots_per_project }} 镜以内的完整成片。免费版成片带水印，升级后自动去除。</span>
+    </div>
+
+    <form class="auth-form" method="post" action="/signup" data-lock>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="field">
+        <label for="email">邮箱</label>
+        <input type="email" id="email" name="email" value="{{ email|default('') }}"
+               autocomplete="email" required autofocus placeholder="you@example.com">
+        <span class="hint">用于登录、接收额度与安全通知。</span>
+      </div>
+
+      <div class="field">
+        <label for="password">密码</label>
+        <div class="input-wrap">
+          <input type="password" id="password" name="password" autocomplete="new-password"
+                 required minlength="{{ settings.security.min_password_length }}"
+                 placeholder="至少 {{ settings.security.min_password_length }} 位" style="padding-right: 44px">
+          <button type="button" class="icon-btn-inside" data-toggle-password="#password"
+                  aria-label="显示密码" aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" stroke="currentColor" stroke-width="1.8"/>
+              <circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.8"/>
+            </svg>
+          </button>
+        </div>
+        <span class="hint">
+          至少 {{ settings.security.min_password_length }} 位，且需包含大写字母、小写字母、数字、符号中的三类；不能包含邮箱名。
+        </span>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="display_name">称呼</label>
+          <input type="text" id="display_name" name="display_name" value="{{ display_name|default('') }}"
+                 autocomplete="nickname" maxlength="80" placeholder="例如：林晚">
+        </div>
+        <div class="field">
+          <label for="org_name">组织名称</label>
+          <input type="text" id="org_name" name="org_name" value="{{ org_name|default('') }}"
+                 maxlength="120" placeholder="留空则用你的称呼">
+          <span class="hint">用于区分团队与账单。</span>
+        </div>
+      </div>
+
+      {% if settings.security.signup_invite_code.get_secret_value() %}
+        <div class="field">
+          <label for="invite_code">邀请码</label>
+          <input type="text" id="invite_code" name="invite_code" maxlength="64"
+                 autocomplete="off" placeholder="当前部署需要邀请码">
+          <span class="hint">本部署处于邀请制阶段，请填写收到的邀请码。</span>
+        </div>
+      {% else %}
+        <div class="field">
+          <label for="invite_code">邀请码<span class="muted" style="font-weight:400">（可选）</span></label>
+          <input type="text" id="invite_code" name="invite_code" maxlength="64"
+                 autocomplete="off" placeholder="有邀请码可以填这里">
+        </div>
+      {% endif %}
+
+      <div class="check">
+        <input type="checkbox" id="agree" name="agree" value="1" required>
+        <label for="agree">
+          我已阅读并同意 <a href="/terms" target="_blank" rel="noopener">服务条款</a> 与
+          <a href="/privacy" target="_blank" rel="noopener">隐私政策</a>，
+          并理解生成内容需遵守模型供应商的内容政策。
+        </label>
+      </div>
+
+      <button class="btn btn-primary btn-block btn-lg" type="submit">创建账号并开始</button>
+    </form>
+
+    <p class="auth-foot">已有账号？<a href="/login">直接登录</a></p>
+    <p class="auth-legal"><a href="/">← 返回首页</a> · 生成失败自动全额退还额度</p>
+  </div>
+</div>
+{% endblock %}

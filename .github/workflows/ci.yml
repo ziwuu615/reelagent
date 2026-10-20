@@ -1,0 +1,227 @@
+# ============================================================================
+# ReelAgent 持续集成
+#
+# 触发：push / pull_request
+# 作业：quality（ruff + mypy）、test（3.11/3.12 矩阵 + 覆盖率）、
+#      integration（真实 Postgres）、docker（镜像可构建）
+#
+# 关于"失败要清晰"的几点约定：
+#   * 每个作业名都写清用途，红叉点开就知道是哪一环，不用翻日志找；
+#   * 质量与测试作业**不加** continue-on-error：门禁就是门禁，
+#     允许失败的检查等于没有检查；确实要放宽请改成分支保护规则而不是这里；
+#   * 已知基线（首次接入 CI 时请先看这段）：
+#       - `ruff check` 当前报 1880 个问题，其中 1708 个是 RUF001/002/003
+#         「字符串/注释里出现易混淆的 Unicode 字符」——项目通篇是中文注释，
+#         全角标点（，、：）必然命中该规则。建议在 pyproject.toml 的
+#         [tool.ruff.lint] ignore 里补上 "RUF001", "RUF002", "RUF003"，
+#         剩下的 ~172 个才是真问题。
+#       - `ruff format --check` 当前有 92 个文件待格式化（先跑 `make fmt`）。
+#       - `mypy` 当前 45 个错误。
+#       - 测试当前有 1 个失败用例（tests/test_pipeline.py 的确定性用例）。
+#     这些都**不是**流水线本身的问题，因此作业保持失败状态以便被发现和修复。
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    # 打 tag 走 release.yml，避免一次发布跑两遍完整 CI
+    tags-ignore: ["v*"]
+  pull_request:
+
+# 同一分支连推多次时取消旧的运行，省 runner 也省排队时间
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 关掉 pip 的版本检查与进度条，日志更干净、装包更快
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # 静态检查：快、便宜、反馈最直接，放最前面
+  # ------------------------------------------------------------------ #
+  quality:
+    name: 代码质量（ruff check / ruff format / mypy）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 安装项目与开发依赖
+        run: pip install -e ".[dev,s3,sentry]"
+
+      - name: ruff check（含安全规则 S）
+        run: ruff check .
+
+      - name: ruff format --check（格式必须与 formatter 一致）
+        run: ruff format --check .
+
+      - name: mypy（含 pydantic 插件）
+        run: mypy .
+
+  # ------------------------------------------------------------------ #
+  # 单元/契约测试：3.11 与 3.12 双版本。
+  # 这里**不挂** Postgres：现有测试用 SQLite 就能跑，保持这一层快而封闭，
+  # 真实数据库的验证交给下面的 integration 作业。
+  # ------------------------------------------------------------------ #
+  test:
+    name: 测试（Python ${{ matrix.python-version }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # 一个版本挂了另一个版本也要跑完，一次拿到全貌
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 安装项目与开发依赖
+        run: pip install -e ".[dev,s3,sentry]"
+
+      - name: 运行测试并采集覆盖率
+        env:
+          # 测试期间显式用 SQLite，避免 CI 环境里残留的数据库变量影响结果
+          REEL_ENV: dev
+          REEL_DATABASE__URL: sqlite+aiosqlite:///./tests/_tmp/ci.db
+        run: |
+          mkdir -p tests/_tmp
+          python -m pytest \
+            --cov=reelagent \
+            --cov=reelagent_cloud \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov
+
+      - name: 上传覆盖率报告（供人工排查，始终上传）
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: 上传到 Codecov（可选）
+        # 未配置 CODECOV_TOKEN 时该步骤会失败，但不应拖垮整条流水线
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: py${{ matrix.python-version }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # ------------------------------------------------------------------ #
+  # 集成测试：真跑一个 Postgres 16 服务容器。
+  # 现有测试集没有 integration 标记的用例时优雅跳过（pytest 无匹配用例
+  # 的退出码是 5，不能当成失败），等后续补上用例自动开始生效。
+  # ------------------------------------------------------------------ #
+  integration:
+    name: 集成测试（真实 Postgres）
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: reelagent
+          POSTGRES_PASSWORD: reelagent
+          POSTGRES_DB: reelagent_test
+        ports:
+          - 5432:5432
+        # 等数据库真的能接受连接，否则第一步就会连接被拒
+        options: >-
+          --health-cmd "pg_isready -U reelagent -d reelagent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      REEL_ENV: staging
+      REEL_DATABASE__URL: postgresql+asyncpg://reelagent:reelagent@127.0.0.1:5432/reelagent_test
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 安装项目与开发依赖
+        run: pip install -e ".[dev,s3,sentry]"
+
+      - name: 等待数据库就绪
+        # 复用交付脚本本身，顺带在 CI 里验证它可用
+        run: python scripts/wait_for_db.py --timeout 90
+
+      - name: 运行集成测试（无用例则跳过）
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -m integration -q
+          code=$?
+          set -e
+          if [ "$code" -eq 5 ]; then
+            echo "::notice::没有标记为 integration 的测试用例，跳过该作业"
+            exit 0
+          fi
+          exit "$code"
+
+  # ------------------------------------------------------------------ #
+  # 镜像构建：只构建不推送，确保 Dockerfile 一直可用。
+  # 生产镜像最容易"悄悄坏掉"（基础镜像升级、依赖改名），
+  # 靠这个作业在 PR 阶段就暴露，而不是等到发布时才发现。
+  # ------------------------------------------------------------------ #
+  docker:
+    name: 构建镜像（不推送）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建生产镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: false
+          # GitHub Actions 缓存：第二次构建从依赖层开始命中
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 构建开发镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.dev
+          push: false
+          load: false
+          cache-from: type=gha

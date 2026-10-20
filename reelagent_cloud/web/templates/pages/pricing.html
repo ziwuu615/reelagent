@@ -1,0 +1,237 @@
+{% extends 'base.html' %}
+{% set layout = 'site' %}
+{% set topnav_active = 'pricing' %}
+{% block title %}定价 · {{ product_name }}{% endblock %}
+{% block description %}{{ product_name }} 定价：体验版免费，创作者版 ¥49/月，专业版 ¥199/月，工作室版 ¥699/月。按点数计费，生成失败全额退还。{% endblock %}
+
+{% block site_content %}
+<section class="section-tight">
+  <div class="container container-wide">
+    <div class="section-head center">
+      <span class="eyebrow">定价</span>
+      <h1>四档套餐，按点数计费</h1>
+      <p class="lede">
+        100 点 ≈ 1 美元的模型成本。订阅额度在每个结算周期重置、不结转；单独购买的点数包不过期。
+        所有套餐的生成失败都会自动全额退还。
+      </p>
+    </div>
+
+    {# 四档套餐卡片 #}
+    <div class="grid plan-grid plan-grid-4">
+      {% for plan in all_plans %}
+        <article class="plan{% if plan.tier.value == 'pro' %} plan-featured{% endif %}">
+          {% if plan.tier.value == 'pro' %}<span class="plan-flag">最受欢迎</span>{% endif %}
+          <p class="plan-name">{{ plan.name }}</p>
+          <p class="plan-tagline">{{ plan.tagline }}</p>
+          <p class="plan-price">
+            {% if plan.is_free %}
+              <strong>免费</strong>
+            {% else %}
+              <strong>{{ plan.price_cny|money }}</strong><span>/ 月</span>
+            {% endif %}
+          </p>
+          <p class="plan-credits">
+            {% if plan.is_free %}注册即送{% endif %}{{ plan.monthly_credits|credits }} 点
+            {% if plan.is_free %}额度{% else %}／月{% endif %}
+            {% if plan.credits_per_cny %}· 每元约 {{ plan.credits_per_cny|round(1) }} 点{% endif %}
+          </p>
+
+          <ul class="plan-list">
+            {% for item in plan.highlights %}
+              <li>
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>{{ item }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+
+          <div class="plan-cta">
+            {% if plan.is_free %}
+              <a class="btn btn-ghost btn-block" href="{{ '/app' if principal else '/signup' }}">
+                {% if principal %}当前可用{% else %}免费注册{% endif %}
+              </a>
+            {% else %}
+              <a class="btn {% if plan.tier.value == 'pro' %}btn-primary{% else %}btn-ghost{% endif %} btn-block"
+                 href="{{ '/app/billing' if principal else '/signup' }}">
+                {% if principal %}升级到{{ plan.name }}{% else %}选择{{ plan.name }}{% endif %}
+              </a>
+            {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+
+    {% if not billing_enabled %}
+      <div class="alert alert-info mt-4">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.6v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>当前部署未开启在线支付。需要开通套餐或购买点数包，请邮件联系 {{ support_email }}。</span>
+      </div>
+    {% endif %}
+  </div>
+</section>
+
+{# 逐项对比表 #}
+<section class="section-tight">
+  <div class="container container-wide">
+    <div class="section-head">
+      <span class="eyebrow">逐项对比</span>
+      <h2>四档套餐的差别到底在哪</h2>
+      <p class="lede">差异集中在四件事：镜头数上限、并发任务数、项目与成员容量、以及对 API / BYOK 的开放程度。</p>
+    </div>
+
+    <div class="card">
+      <div class="table-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">能力</th>
+              {% for plan in all_plans %}
+                <th scope="col"{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.name }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">月费</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.price_cny|money }}{% if not plan.is_free %} / 月{% endif %}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">每月点数</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.monthly_credits|credits }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">单条成片镜头数上限</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.max_shots_per_project }} 个</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">同时生成任务数</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.max_concurrent_jobs }} 个</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">项目保留数量</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>
+                  {{ '不限' if plan.max_projects < 0 else plan.max_projects ~ ' 个' }}
+                </td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">团队成员</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.max_org_members }} 人</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">高保真（Premium）档位</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ '支持' if plan.allow_premium_tier else '不支持' }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">去水印 / 商用授权</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ '是' if plan.commercial_use else '否（仅体验）' }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">REST API 与 API Key</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ '开放' if plan.tier.value in ['pro', 'studio'] else '不开放' }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">自带密钥（BYOK）</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ '支持' if plan.tier.value in ['pro', 'studio'] else '不支持' }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">调度优先级</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.priority }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th scope="row">支持渠道</th>
+              {% for plan in all_plans %}
+                <td{% if plan.tier.value == 'pro' %} class="col-featured"{% endif %}>{{ plan.support }}</td>
+              {% endfor %}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid grid-3 mt-4">
+      <div class="card">
+        <div class="card-body">
+          <h3 class="card-title">点数怎么算</h3>
+          <p class="muted small mt-1">
+            点数按实际模型调用成本折算：一张关键帧、一段视频、一句配音都会各自计点。
+            生成前你能看到预估，生成后能看到每一笔的真实消耗。
+          </p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <h3 class="card-title">失败了怎么办</h3>
+          <p class="muted small mt-1">
+            单镜失败会自动重试；整条任务失败则全额退还本次预扣的点数，
+            并在用量页留一条可对账的流水记录。
+          </p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <h3 class="card-title">可以随时换档吗</h3>
+          <p class="muted small mt-1">
+            可以。升级立即生效并按比例折算本周期额度；降级在当期结束时生效，
+            已购买的点数包不受影响。
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# FAQ #}
+<section class="section-tight">
+  <div class="container container-narrow">
+    <div class="section-head center">
+      <span class="eyebrow">常见问题</span>
+      <h2>计费与额度</h2>
+    </div>
+    <div class="faq">
+      {% for item in faqs %}
+        <details class="faq-item"{% if loop.first %} open{% endif %}>
+          <summary>{{ item.q }}</summary>
+          <div class="faq-body">{{ item.a }}</div>
+        </details>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="section-tight">
+  <div class="container container-wide">
+    <div class="cta-band">
+      <h2>不确定选哪一档？先用免费额度跑一条</h2>
+      <p class="lede">体验版包含 500 点，足够生成一条 6 镜的完整成片。跑通之后再升级，不会有任何损失。</p>
+      <div class="btn-row" style="justify-content: center">
+        <a class="btn btn-primary btn-lg" href="{{ '/app/projects/new' if principal else '/signup' }}">
+          {{ '新建成片' if principal else '免费注册' }}
+        </a>
+        <a class="btn btn-on-dark btn-lg" href="mailto:{{ support_email }}">咨询企业方案</a>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

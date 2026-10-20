@@ -1,0 +1,192 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}生成中 · {{ project.title or '成片' }} · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/app/projects">我的成片</a><span>/</span><span>{{ project.id }}</span></div>
+    <h1>{{ project.title or '未命名成片' }} · 正在生成</h1>
+    <p class="lede">
+      这条成片正在流水线上执行：拆解剧本 → 生成角色与场景 → 逐镜生成 → 质量评测 → 合成成片。
+      通常 3-8 分钟完成，页面会自动刷新进度。
+    </p>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-ghost" href="/app/projects">返回列表</a>
+    {% if final %}
+      <a class="btn btn-soft" href="/app/projects/{{ project.id }}/studio">分镜工作室</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid-2-1">
+  <div>
+    {# 主进度 #}
+    {% set job = latest_job %}{% set cancel_action = '/app/projects/' ~ project.id ~ '/cancel' %}
+    {% include 'partials/job_progress.html' %}
+
+    {# 实时关键帧：生成中也能看到已完成的镜头 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">已生成的关键帧</h3>
+          <p class="card-sub">已完成 {{ project.finished_shots }} / {{ project.total_shots or (shots|length) or '—' }} 个镜头</p>
+        </div>
+        {% if shots %}
+          <a class="btn btn-ghost btn-sm" href="/app/projects/{{ project.id }}/studio">查看全部分镜</a>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        {% if keyframes %}
+          <div class="thumbs">
+            {% for shot in shots %}
+              {% set frame = keyframes.get(shot.shot_key) %}
+              {% if frame %}
+                <figure class="thumb" style="margin: 0">
+                  <a href="/files/{{ frame.storage_key }}" target="_blank" rel="noopener">
+                    <img src="/files/{{ frame.storage_key }}" alt="{{ shot.shot_key }} 关键帧" loading="lazy">
+                  </a>
+                  <figcaption class="thumb-cap">{{ shot.shot_key }}</figcaption>
+                </figure>
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty" style="padding: 26px 10px">
+            <div class="empty-icon" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24" width="22" height="22"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 3.5V12l6 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </div>
+            <p class="empty-title">关键帧还在生成</p>
+            <p class="muted small">第一个镜头完成后，这里会陆续出现预览图。页面会自动刷新。</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    {# 镜头进度一览 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">镜头进度</h3>
+          <p class="card-sub">逐镜展示当前状态，失败会自动重试</p>
+        </div>
+      </div>
+      {% if shots %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col">镜头</th>
+                <th scope="col">景别 / 运镜</th>
+                <th scope="col">动作</th>
+                <th scope="col" class="num">时长</th>
+                <th scope="col">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for shot in shots %}
+                <tr>
+                  <td class="mono tight">{{ shot.shot_key }}</td>
+                  <td class="tight">{{ shot.shot_size|shot_size }}{% if shot.camera %} / {{ shot.camera }}{% endif %}</td>
+                  <td>{{ (shot.action or shot.narration or '—')|truncate(56, true) }}</td>
+                  <td class="num">{{ shot.duration_s|duration }}</td>
+                  <td>
+                    {% if shot.status in ['succeeded', 'ready', 'done'] %}
+                      <span class="badge badge-ok"><i class="dot"></i>完成</span>
+                    {% elif shot.status in ['running', 'generating'] %}
+                      <span class="badge badge-busy"><i class="dot"></i>生成中</span>
+                    {% elif shot.status in ['failed', 'dead'] %}
+                      <span class="badge badge-bad"><i class="dot"></i>失败</span>
+                    {% else %}
+                      <span class="badge badge-muted"><i class="dot"></i>排队中</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="card-body">
+          <div class="empty" style="padding: 26px 10px">
+            <p class="empty-title">剧本还在拆解</p>
+            <p class="muted small">分镜表生成后，这里会列出每个镜头。</p>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  </div>
+
+  {# 右栏 #}
+  <div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">这次生成</h3>
+          <p class="card-sub">项目编号 {{ project.id }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <dl class="meta-list">
+          <div class="meta-row"><dt>风格</dt><dd>{{ project.style }}</dd></div>
+          <div class="meta-row"><dt>画幅</dt><dd>{{ project.aspect_ratio }}</dd></div>
+          <div class="meta-row"><dt>计划镜头</dt><dd>{{ project.total_shots or '—' }}</dd></div>
+          <div class="meta-row"><dt>已消耗点数</dt><dd>{{ project.credits_spent|credits }} 点</dd></div>
+          <div class="meta-row"><dt>可用额度</dt><dd>{{ org.credits_balance|credits }} 点</dd></div>
+          <div class="meta-row"><dt>提交时间</dt><dd>{{ project.created_at|dt }}</dd></div>
+          <div class="meta-row"><dt>最近更新</dt><dd>{{ project.updated_at|relative }}</dd></div>
+        </dl>
+
+        <div class="alert alert-info alert-inline">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.6v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>可以关闭页面，生成会在后台继续。回来后从「我的成片」进入即可看到最新进度。</span>
+        </div>
+      </div>
+      <div class="card-foot">
+        <span class="muted small">取消后未执行部分不消耗额度。</span>
+        <form method="post" action="/app/projects/{{ project.id }}/cancel" class="inline-form"
+              data-confirm="确认取消本次生成？未消耗的额度将自动退还。">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-danger btn-sm" type="submit">取消生成</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">素材原文</h3>
+          <p class="card-sub">拆分剧本的依据</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="small" style="white-space: pre-wrap">{{ project.seed_text }}</p>
+      </div>
+    </section>
+
+    {% if jobs and jobs|length > 1 %}
+      <section class="card mt-4">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">任务队列</h3>
+            <p class="card-sub">本项目的历史任务</p>
+          </div>
+        </div>
+        <div class="card-body" style="display: grid; gap: 12px">
+          {% for job in jobs %}
+            <div>
+              <div class="flex-between">
+                <span class="mono small">{{ job.id|truncate(18, true) }}</span>
+                {% set status = job.status %}{% set label = none %}
+                {% include 'partials/badge.html' %}
+              </div>
+              <p class="muted small mb-0 mt-1">{{ job.stage|stage_label }} · {{ (job.progress * 100)|round(0) }}% · {{ job.created_at|dt }}</p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

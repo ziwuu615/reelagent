@@ -1,0 +1,97 @@
+# ============================================================================
+# ReelAgent 数据库迁移 Job（一次性）
+#
+# 为什么必须有它：
+#   和 docker compose 里 migrate 服务的作用完全一样 —— 先等库可连，再改表结构，
+#   成功退出后才让 api/worker 滚动更新。少了这一步，滚动更新期间新代码会遇到
+#   旧表结构，轻则报列不存在，重则写坏数据。
+#
+# 用法：
+#   kubectl apply -f deploy/k8s/job-migrate.yaml
+#   kubectl wait --for=condition=complete job/reelagent-migrate -n reelagent --timeout=300s
+#   kubectl rollout restart deployment/reelagent-api deployment/reelagent-worker -n reelagent
+#
+# 注意：Job 名带版本号后缀且每次发布都要换一个名字（Job 一旦完成就不能改 spec），
+#      或者先 `kubectl delete job reelagent-migrate` 再 apply。
+#      放进 Argo CD / Flux 时可以用 sync-wave 注解控制顺序（见文件末尾注释）。
+# ============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: reelagent-migrate-1-0-0
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/part-of: reelagent
+  annotations:
+    # Argo CD 用户：把它排在 api/worker 之前（数字越小越早）
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  # 失败重试上限：迁移失败通常是结构冲突，盲目重试只会拖长故障时间
+  backoffLimit: 2
+  # 迁移完成 24 小时后自动清理 Job 对象（保留日志到那个时间点）
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reelagent
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/CHANGE_ME_owner/reel-agent:1.0.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: reelagent-config
+            - secretRef:
+                name: reelagent-secrets
+          # 先等数据库真的能接受连接（Postgres 初始化时会先起临时实例），
+          # 再跑迁移。脚本对超时/重试与错误提示都做了处理，见 scripts/wait_for_db.py。
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              python scripts/wait_for_db.py --timeout 180
+              if [ -f alembic.ini ]; then
+                echo "[migrate] 执行 alembic upgrade head"
+                alembic upgrade head
+              else
+                echo "[migrate] 未找到 alembic.ini。" >&2
+                echo "[migrate] 生产环境不会自动建表（避免悄悄改线上结构）。" >&2
+                echo "[migrate] 请先执行：alembic init reelagent_cloud/db/migrations 并提交首个版本。" >&2
+                exit 1
+              fi
+              echo "[migrate] 迁移完成"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # 迁移过程不写业务文件，但引擎模块导入时会确保 workspace 目录存在
+            - name: workspace
+              mountPath: /app/workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

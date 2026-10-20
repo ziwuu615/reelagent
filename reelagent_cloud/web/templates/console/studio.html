@@ -1,0 +1,276 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}分镜工作室 · {{ project.title or '成片' }} · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">
+      <a href="/app/projects">我的成片</a><span>/</span>
+      <a href="/app/projects/{{ project.id }}">{{ project.title or project.id }}</a><span>/</span>
+      <span>工作室</span>
+    </div>
+    <h1>分镜工作室</h1>
+    <p class="lede">
+      逐镜审核关键帧与提示词。勾选不满意的镜头后重跑，费用只按重跑数量计算，其余镜头保持不动。
+    </p>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-ghost" href="/app/projects/{{ project.id }}">成片详情</a>
+    {% if final %}
+      <a class="btn btn-soft" href="/api/v1/artifacts/{{ final.id }}/download?disposition=attachment">下载成片</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-error" role="alert">
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>{{ error }}</span>
+  </div>
+{% endif %}
+
+<div class="grid grid-4 mb-4">
+  <div class="stat">
+    <p class="stat-label">项目状态</p>
+    <p class="stat-value" style="font-size:1.25rem">
+      {% set status = project.status %}{% set label = none %}
+      {% include 'partials/badge.html' %}
+    </p>
+    <p class="stat-hint">{{ project.style }} · {{ project.aspect_ratio }}</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">镜头进度</p>
+    <p class="stat-value">{{ project.finished_shots }}<span>/ {{ project.total_shots or (shots|length) or '—' }}</span></p>
+    <p class="stat-hint">套餐单条上限 {{ max_shots }} 镜</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">已配置基准图</p>
+    <p class="stat-value">{{ keyframes|length }}<span>张关键帧</span></p>
+    <p class="stat-hint">角色与场景设定图 {{ clues|length }} 项</p>
+  </div>
+  <div class="stat">
+    <p class="stat-label">可用额度</p>
+    <p class="stat-value">{{ org.credits_balance|credits }}<span>点</span></p>
+    <p class="stat-hint">重跑按镜头数计费</p>
+  </div>
+</div>
+
+{# 线索 / 基准设定 #}
+<section class="card mb-4">
+  <div class="card-head">
+    <div>
+      <h3 class="card-title">角色与场景基准</h3>
+      <p class="card-sub">
+        这些设定图与描述会被注入每个相关镜头的提示词，是跨镜头一致性的来源
+      </p>
+    </div>
+  </div>
+  <div class="card-body">
+    {% if clues %}
+      <div class="grid grid-3">
+        {% for clue in clues %}
+          {% set base = clue_map.get(clue.get('id')) %}
+          <div class="card" style="box-shadow:none">
+            <div class="card-body">
+              <div class="flex-between">
+                <p class="ink mb-0"><strong>{{ clue.get('name') or clue.get('id') }}</strong></p>
+                {% if clue.get('kind') %}<span class="tag">{{ clue.get('kind') }}</span>{% endif %}
+              </div>
+              <p class="muted small mt-1 mb-0">{{ (clue.get('description') or '（无描述）')|truncate(90, true) }}</p>
+              {% if clue.get('keyframe_key') or (base and base.get('image_key')) %}
+                <p class="mono small mt-2 mb-0">参考图：{{ clue.get('keyframe_key') or base.get('image_key') }}</p>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted small mb-0">
+        当前项目还没有记录角色与场景基准。若成片出现角色「变脸」，可以先跑一次完整生成，
+        系统会自动建立基准图后再逐镜出片。
+      </p>
+    {% endif %}
+  </div>
+</section>
+
+{# 重跑表单：勾选框放在这里，提示词编辑走独立弹窗，避免表单嵌套 #}
+<form method="post" action="/app/projects/{{ project.id }}/regenerate" data-lock>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="shot_keys" id="selected_shot_keys" value="">
+
+  <div class="flex-between mb-3">
+    <h2 style="font-size:1.125rem">镜头卡片</h2>
+    <div class="btn-row">
+      <button type="button" class="btn btn-ghost btn-sm" data-select-all="all">全选</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-select-all="none">清空</button>
+    </div>
+  </div>
+
+  {% if shots %}
+    <div class="shot-cards">
+      {% for shot in shots %}
+        {% set frame = keyframes.get(shot.shot_key) %}
+        <article class="card shot-card" data-shot-card>
+          <div class="shot-card-media">
+            {% if frame %}
+              <a href="/files/{{ frame.storage_key }}" target="_blank" rel="noopener" style="display:block;width:100%;height:100%">
+                <img src="/files/{{ frame.storage_key }}" alt="{{ shot.shot_key }} 关键帧" loading="lazy">
+              </a>
+            {% else %}
+              <span class="ph">关键帧待生成</span>
+            {% endif %}
+          </div>
+
+          <div class="shot-keyline">
+            <label class="check" style="align-items:center">
+              <input type="checkbox" data-shot-check value="{{ shot.shot_key }}"
+                     aria-label="选择 {{ shot.shot_key }} 参与重跑">
+              <span class="shot-key">{{ shot.shot_key }}</span>
+            </label>
+            {% if shot.status in ['succeeded', 'ready', 'done'] %}
+              <span class="badge badge-ok"><i class="dot"></i>完成</span>
+            {% elif shot.status in ['running', 'generating'] %}
+              <span class="badge badge-busy"><i class="dot"></i>生成中</span>
+            {% elif shot.status in ['failed', 'dead'] %}
+              <span class="badge badge-bad"><i class="dot"></i>失败</span>
+            {% else %}
+              <span class="badge badge-muted"><i class="dot"></i>待生成</span>
+            {% endif %}
+          </div>
+
+          <div class="shot-fields">
+            <div class="kv-inline">
+              <span class="tag">{{ shot.shot_size|shot_size or '未标注景别' }}</span>
+              {% if shot.camera %}<span class="tag">运镜 {{ shot.camera }}</span>{% endif %}
+              <span class="tag">{{ shot.duration_s|duration }}</span>
+              {% if shot.tier %}<span class="tag">档位 {{ shot.tier }}</span>{% endif %}
+              {% if shot.credits %}<span class="tag">消耗 {{ shot.credits|credits }} 点</span>{% endif %}
+            </div>
+
+            <div>
+              <p class="label mb-1">动作 / 画面</p>
+              <p class="small mb-0">{{ shot.action or shot.narration or '（无描述）' }}</p>
+            </div>
+
+            {% if shot.dialogue %}
+              <div>
+                <p class="label mb-1">台词</p>
+                <p class="small mb-0">{{ shot.dialogue }}</p>
+              </div>
+            {% endif %}
+
+            <div>
+              <p class="label mb-1">画面提示词</p>
+              <p class="muted small mb-0" style="white-space: pre-wrap">{{ (shot.image_prompt or '（使用默认风格模板）')|truncate(160, true) }}</p>
+            </div>
+
+            {% if shot.clue_ids %}
+              <div class="kv-inline">
+                {% for cid in shot.clue_ids %}<span class="tag tag-mono">{{ cid }}</span>{% endfor %}
+              </div>
+            {% endif %}
+
+            {% if shot.error %}
+              <div class="alert alert-error alert-inline">
+                <span class="small">{{ shot.error|truncate(140, true) }}</span>
+              </div>
+            {% endif %}
+
+            {% if shot.provider %}
+              <p class="muted small mb-0">
+                {{ shot.provider }}{% if shot.model %} · {{ shot.model }}{% endif %}
+                · 成本 ${{ '%.4f'|format(shot.cost_usd or 0) }}
+                {% if shot.attempts %} · 尝试 {{ shot.attempts }} 次{% endif %}
+              </p>
+            {% endif %}
+
+            <div class="btn-row">
+              <button type="button" class="btn btn-soft btn-sm"
+                      data-dialog-open="#prompt-dialog"
+                      data-dialog-title="编辑 {{ shot.shot_key }} 的画面提示词"
+                      data-fill-action="/app/projects/{{ project.id }}/shots/{{ shot.shot_key }}/prompt"
+                      data-fill-shotkey="{{ shot.shot_key }}"
+                      data-fill-prompt="{{ shot.image_prompt }}"
+                      data-fill-image="{{ ('/files/' ~ frame.storage_key) if frame else '' }}">
+                编辑提示词
+              </button>
+              {% if frame %}
+                <a class="btn btn-ghost btn-sm" href="/files/{{ frame.storage_key }}" target="_blank" rel="noopener">查看原图</a>
+              {% endif %}
+            </div>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="card-body">
+        <div class="empty">
+          <div class="empty-icon" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24" width="22" height="22"><path d="M4 6h16v12H4z" stroke="currentColor" stroke-width="1.8"/><path d="M4 12h16M9 6v12" stroke="currentColor" stroke-width="1.8"/></svg>
+          </div>
+          <p class="empty-title">还没有分镜数据</p>
+          <p class="muted">先让项目跑一次完整生成，拆解出的镜头会出现在这里。</p>
+          <a class="btn btn-primary" href="/app/projects/{{ project.id }}">回到成片详情</a>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if shots %}
+    <div class="selection-bar">
+      <div class="flex-between">
+        <div>
+          <p class="mb-0 ink"><strong data-selection-count>已选 0 个镜头</strong></p>
+          <p class="muted small mb-0">
+            重跑会新建一个任务，完成后自动替换对应镜头的关键帧与片段；未勾选的镜头不受影响。
+          </p>
+        </div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary" data-selection-submit disabled>重跑选中镜头</button>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+</form>
+
+{# 提示词编辑弹窗 #}
+<dialog class="sheet" id="prompt-dialog" aria-labelledby="prompt-dialog-title">
+  <form method="post" action="" data-dialog-field="action" data-lock>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title" id="prompt-dialog-title" data-dialog-text>编辑画面提示词</h3>
+        <p class="card-sub">保存后仅更新该镜头的提示词；如需应用到画面，请勾选该镜头并重跑。</p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" data-dialog-close>关闭</button>
+    </div>
+    <div class="card-body">
+      <img class="sheet-image hide" alt="当前关键帧" data-dialog-image>
+      <div class="field">
+        <label for="prompt-shot-key">镜头</label>
+        <input type="text" id="prompt-shot-key" class="mono" data-dialog-field="shotkey" readonly>
+      </div>
+      <div class="field mt-3">
+        <label for="prompt-image-prompt">画面提示词</label>
+        <textarea id="prompt-image-prompt" name="image_prompt" rows="8"
+                  placeholder="描述这个镜头的画面：主体、环境、光线、镜头语言。留空则回退到风格模板。"></textarea>
+        <span class="hint">系统会在你的描述后自动追加风格关键词与角色一致性描述，无需重复书写。</span>
+      </div>
+    </div>
+    <div class="card-foot">
+      <span class="muted small">保存不会立即消耗额度。</span>
+      <div class="btn-row">
+        <button type="button" class="btn btn-ghost" data-dialog-close>取消</button>
+        <button type="submit" class="btn btn-primary">保存提示词</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<p class="muted small mt-3">
+  提示：重跑前建议先确认基准设定图是否符合预期——角色外观一旦确定，后续所有镜头都会以它为参考。
+  如有疑问可联系 {{ support_email }}。
+</p>
+{% endblock %}

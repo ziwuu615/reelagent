@@ -1,0 +1,55 @@
+{# 顶部导航。已登录（principal 存在）显示控制台入口与登出；未登录显示登录/注册。 #}
+<header class="topbar">
+  <div class="container container-wide topbar-inner">
+    <a class="brand" href="{{ '/app' if principal else '/' }}">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+          <rect x="1.5" y="5.5" width="21" height="21" rx="5.5" stroke="currentColor" stroke-width="2"/>
+          <path d="M22.5 14.2 30 9.4v13.2l-7.5-4.8z" fill="currentColor" opacity=".85"/>
+          <circle cx="9" cy="13" r="2.2" fill="currentColor"/>
+          <path d="M5.6 22.4c1.5-2.6 4-3.9 6.4-3.9s4.9 1.3 6.4 3.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="brand-text">
+        <strong>{{ product_name }}</strong>
+        <small>AI 短视频生成平台</small>
+      </span>
+    </a>
+
+    {% if layout != 'console' %}
+    <nav class="topnav" aria-label="主导航">
+      <a href="/#features"{% if topnav_active|default('') == 'features' %} class="is-active"{% endif %}>功能</a>
+      <a href="/#how"{% if topnav_active|default('') == 'how' %} class="is-active"{% endif %}>工作流</a>
+      <a href="/#styles"{% if topnav_active|default('') == 'styles' %} class="is-active"{% endif %}>风格</a>
+      <a href="/pricing"{% if topnav_active|default('') == 'pricing' %} class="is-active"{% endif %}>定价</a>
+      <a href="/status"{% if topnav_active|default('') == 'status' %} class="is-active"{% endif %}>状态</a>
+    </nav>
+    {% else %}
+    <div class="topbar-context">
+      {% if org is defined and org %}
+        <span class="chip chip-quiet" title="当前组织">{{ org.name }}</span>
+      {% endif %}
+      {% if plan is defined and plan %}
+        <span class="chip">{{ plan.name }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="topbar-actions">
+      {% if principal %}
+        <a class="btn btn-ghost btn-sm hide-sm" href="/app/projects/new">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          新建成片
+        </a>
+        <span class="topbar-user hide-sm">{{ principal.user.display_name or principal.user.email }}</span>
+        <form method="post" action="/logout" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-soft btn-sm" type="submit">登出</button>
+        </form>
+      {% else %}
+        <a class="btn btn-ghost btn-sm" href="/login{% if request.url.path not in ['/login', '/signup'] %}?next={{ request.url.path }}{% endif %}">登录</a>
+        <a class="btn btn-primary btn-sm" href="/signup">免费开始</a>
+      {% endif %}
+    </div>
+  </div>
+</header>

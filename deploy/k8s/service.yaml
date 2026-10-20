@@ -1,0 +1,58 @@
+# ============================================================================
+# ReelAgent API Service
+#
+# 只暴露 api。worker 不接流量，**不要**给它建 Service ——
+# 建了反而会有人误连上去发请求，而 worker 根本没有 HTTP 服务。
+#
+# 探针与 Endpoints 的关系：readinessProbe 失败（/readyz 返回 503）的 Pod
+# 会被自动从 Endpoints 摘除，因此这里不需要额外做健康检查逻辑。
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: reelagent-api
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: reelagent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 80              # Ingress / 集群内调用用的端口
+      targetPort: http      # 指向容器里名为 http 的 8000 端口
+      protocol: TCP
+  # 会话 Cookie 与 Webhook 都是短连接，用默认的 RoundRobin 即可；
+  # 若之后上 WebSocket 实时进度，再考虑 sessionAffinity: ClientIP。
+  sessionAffinity: None
+---
+# ============================================================================
+# 可选：只给 Prometheus 用的 Service（配合 ServiceMonitor）。
+# 与主 Service 分开的好处是抓取流量不经过 Ingress/业务链路，
+# 也方便用 NetworkPolicy 只放行监控命名空间。
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: reelagent-api-metrics
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: reelagent
+    # 若装了 prometheus-operator，这个标签能让 ServiceMonitor 自动选中它
+    prometheus.io/scrape: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: api
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: http
+      protocol: TCP

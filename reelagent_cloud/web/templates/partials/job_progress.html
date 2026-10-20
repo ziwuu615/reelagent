@@ -1,0 +1,74 @@
+{# 任务进度组件。
+   调用方先定义 job（Job 实例，可为 None）与可选的 cancel_action（取消表单提交地址）。
+   进度条宽度用内联 style —— CSP 已放行 style-src 'unsafe-inline'。
+   非终态时带 data-job-progress，由 app.js 轮询 /api/v1/jobs/{id} 就地刷新。 #}
+{% set _job = job|default(none) %}
+{% set _cancel_action = cancel_action|default('') %}
+{% set _failed = _job and _job.status.value in ['failed', 'dead', 'cancelled'] %}
+{% if _job %}
+  {% set _terminal = _job.status.value in ['succeeded', 'failed', 'dead', 'cancelled'] %}
+  {% set _pct = (0 if _failed else (_job.progress * 100))|round(1) %}
+  {% set _stages = [('queued', '排队中'), ('planning', '拆解剧本'), ('assets', '生成角色与场景'), ('generating', '逐镜生成'), ('evaluating', '质量评测'), ('rendering', '合成成片'), ('done', '完成')] %}
+  {% set _order = ['queued', 'planning', 'assets', 'generating', 'evaluating', 'rendering', 'done'] %}
+  {% set _current = _order.index(_job.stage.value) if _job.stage.value in _order else 0 %}
+  <section class="card progress-card"{% if not _terminal %} data-job-progress="{{ _job.id }}"{% endif %}>
+    <div class="card-head">
+      <div>
+        <h3 class="card-title">生成进度</h3>
+        <p class="card-sub">任务号 {{ _job.id }}</p>
+      </div>
+      {% set status = _job.status %}{% set label = none %}
+      {% include 'partials/badge.html' %}
+    </div>
+
+    <div class="card-body">
+      <div class="progress-meta">
+        <span class="stage-name" data-job-stage>{{ _job.stage|stage_label }}</span>
+        <span class="progress-value"><span data-job-percent>{{ _pct }}</span>%</span>
+      </div>
+      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ _pct }}" data-job-bar>
+        <div class="progress-fill tone-{{ _job.status|status_tone }}" style="width: {{ _pct }}%" data-job-fill></div>
+      </div>
+
+      <ol class="stages">
+        {% for key, name in _stages %}
+          <li class="stage{% if not _failed and _order.index(key) < _current %} is-done{% elif not _failed and key == _job.stage.value %} is-current{% endif %}">
+            <i class="stage-dot"></i><span>{{ name }}</span>
+          </li>
+        {% endfor %}
+      </ol>
+
+      {% if _job.error %}
+        <div class="alert alert-error alert-inline" role="alert">
+          <span>{{ _job.error }}{% if _job.error_code %}（错误码 {{ _job.error_code }}）{% endif %}</span>
+        </div>
+      {% endif %}
+
+      <p class="muted small">
+        创建于 {{ _job.created_at|dt }}
+        {% if _job.started_at %}· 开始于 {{ _job.started_at|dt }}{% endif %}
+        {% if _job.finished_at %}· 结束于 {{ _job.finished_at|dt }}{% endif %}
+      </p>
+
+      {% if not _terminal %}
+        <p class="muted small">页面会自动刷新进度。若任务失败，已消耗的额度将自动全额退还。</p>
+        {% if _cancel_action %}
+          <form method="post" action="{{ _cancel_action }}" class="inline-form"
+                data-confirm="取消后本次生成会立即停止，未消耗的额度自动退还。确认取消？">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm">取消生成</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </div>
+  </section>
+{% else %}
+  <section class="card progress-card">
+    <div class="card-body">
+      <div class="empty">
+        <p class="empty-title">暂无生成任务</p>
+        <p class="muted">当前项目没有排队或运行中的任务。</p>
+      </div>
+    </div>
+  </section>
+{% endif %}

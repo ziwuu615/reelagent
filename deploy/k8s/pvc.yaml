@@ -1,0 +1,57 @@
+# ============================================================================
+# ReelAgent 产物卷（**可选**，仅当 REEL_STORAGE__BACKEND=local 时需要）
+#
+# 默认方案是 s3（见 configmap.yaml），那种情况下不要用这个 PVC：
+# api/worker 各自用 emptyDir 当临时空间即可，产物在对象存储里。
+#
+# 什么时候需要它：
+#   你不想引入对象存储，就想把成片放在集群的盘上。
+# 代价与约束（务必读完再决定）：
+#   1. api 与 worker 必须挂**同一个** PVC，否则 worker 生成的成片 api 读不到；
+#   2. accessModes 用 ReadWriteOnce 意味着这个卷只能被同一个节点上的 Pod 挂载，
+#      所以 api 与 worker 都必须限制为 1 副本，并且最好用 nodeSelector 钉在同一节点；
+#      想真正多副本共享，请改用支持 ReadWriteMany 的存储类（NFS / CephFS / 云文件存储），
+#      本文件末尾给了注释写法；
+#   3. 单点磁盘 = 单点故障，务必做快照/备份（见 deploy/README.md 的备份一节）；
+#   4. 存储类必须支持动态供给（storageClassName 按你的集群填），
+#      否则 PVC 会一直 Pending。
+# ============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reelagent-workspace
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/part-of: reelagent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # ⚠ 按集群实际情况填写：aws-ebs / managed-csi / local-path / longhorn ...
+  #   不填（留空字符串）表示用默认存储类。
+  storageClassName: "CHANGE_ME_你的存储类"
+  resources:
+    requests:
+      # 成片是"大文件 + 中间产物"，先给 100Gi 起步；
+      # 注意：容器里的 workspace 会同时存放引擎临时文件，
+      # 峰值可能是"同时在跑的任务数 × 单个成片体积"的 2~3 倍。
+      storage: 100Gi
+
+# ============================================================================
+# 需要多副本共享时的写法（RWX）：
+# 只有 NFS / CephFS / 云厂商文件存储这类后端支持 ReadWriteMany。
+# 换上之后 api 与 worker 都可以正常多副本，但要注意——
+# 多个 worker 同时往同一目录写时，引擎用的是"每个 job 一个子目录"
+# （workspace/engine/<job_id>），因此不会互相踩，可以放心共享。
+#
+# 用法：复制下面四行覆盖上面的 spec（accessModes 与 storageClassName 是唯一差异）。
+# 这里刻意留成注释而不是第二个 YAML 文档：避免文件里出现"空文档"，
+# 有些 kubectl / GitOps 工具会对空文档报 "no objects passed to apply"。
+# --------------------------------------------------------------------------
+#   accessModes:
+#     - ReadWriteMany
+#   storageClassName: "nfs-client"
+#   resources:
+#     requests:
+#       storage: 200Gi
+# ============================================================================

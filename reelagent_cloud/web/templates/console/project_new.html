@@ -1,0 +1,291 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}新建成片 · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/app/projects">我的成片</a><span>/</span><span>新建</span></div>
+    <h1>新建成片</h1>
+    <p class="lede">贴上素材，选好风格与画幅，剩下的交给流水线。生成前你会先看到额度预估。</p>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-error" role="alert">
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>{{ error }}</span>
+  </div>
+{% endif %}
+
+<form method="post" action="/app/projects" data-lock>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <div class="grid grid-1-2">
+    {# 左栏：素材与命名 #}
+    <div>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">素材</h3>
+            <p class="card-sub">一段小说片段、产品卖点或口播稿都可以</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label for="seed_text">素材正文</label>
+            <textarea id="seed_text" name="seed_text" required maxlength="20000" rows="10"
+                      placeholder="例如：深夜的便利店只剩下最后一盏灯。林晚把湿透的伞收在门口，走向货架……"></textarea>
+            <span class="hint">
+              至少 6 个字，最多 20000 字，当前 <strong data-seed-count>0</strong> 字。素材越具体，拆分出的镜头越准确。
+            </span>
+          </div>
+
+          <div class="field mt-3">
+            <label for="title">标题<span class="muted" style="font-weight:400">（可选）</span></label>
+            <input type="text" id="title" name="title" maxlength="160" placeholder="留空则由系统根据素材生成">
+          </div>
+        </div>
+      </section>
+
+      <section class="card mt-4">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">没有思路？试试这几段</h3>
+            <p class="card-sub">点击即可填入素材框</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="example-list">
+            {% for text in examples %}
+              <button type="button" class="example" data-fill-seed="{{ text }}">
+                <strong>示例 {{ loop.index }}</strong>
+                {{ text|truncate(84, true) }}
+              </button>
+            {% endfor %}
+          </div>
+        </div>
+      </section>
+    </div>
+
+    {# 右栏：风格 / 画幅 / 镜头数 / 预估 #}
+    <div>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">风格预设</h3>
+            <p class="card-sub">风格会改变光照、色调与画质关键词，并贯穿每个分镜</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="pick-grid">
+            {% for key, preset in styles %}
+              <label class="pick">
+                <input type="radio" name="style" value="{{ key }}"
+                       {% if key == (org.default_style or 'cinematic') %}checked{% endif %}>
+                <span class="pick-body">
+                  <span class="swatch" aria-hidden="true">
+                    {% for color in preset.palette %}
+                      <i style="background: rgb({{ color[0] }}, {{ color[1] }}, {{ color[2] }})"></i>
+                    {% endfor %}
+                  </span>
+                  <span class="pick-title">{{ preset.label }}</span>
+                  <span class="pick-desc">{{ preset.lighting }}</span>
+                  <span class="pick-desc">{{ preset.look }}</span>
+                </span>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+      </section>
+
+      <div class="grid grid-2 mt-4">
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h3 class="card-title">画幅</h3>
+              <p class="card-sub">决定成片的构图与投放渠道</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="pick-grid" style="grid-template-columns: minmax(0, 1fr)">
+              {% set ratios = [
+                ('9:16', '竖屏 9:16', '短视频平台主流比例'),
+                ('16:9', '横屏 16:9', '长视频与官网展示'),
+                ('1:1', '方屏 1:1', '信息流与电商主图')
+              ] %}
+              {# 画幅默认取部署配置 settings.aspect_ratio，路由级默认也是 9:16 #}
+              {% set default_ratio = settings.aspect_ratio or '9:16' %}
+              {% for value, name, desc in ratios %}
+                <label class="pick">
+                  <input type="radio" name="aspect_ratio" value="{{ value }}"
+                         {% if value == default_ratio %}checked{% endif %}>
+                  <span class="pick-body">
+                    <span class="pick-title">{{ name }}</span>
+                    <span class="pick-desc">{{ desc }}</span>
+                  </span>
+                </label>
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h3 class="card-title">镜头数</h3>
+              <p class="card-sub">{{ plan.name }}最多 {{ max_shots }} 个镜头</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="shots">镜头数量</label>
+              {# 默认取套餐上限的一半（至少 3 镜），避免误用高消耗档位 #}
+              {% set default_shots = [3, max_shots // 2]|max %}
+              <select id="shots" name="shots">
+                {% for n in range(3, max_shots + 1) %}
+                  <option value="{{ n }}"{% if n == default_shots %} selected{% endif %}>{{ n }} 个镜头</option>
+                {% endfor %}
+              </select>
+              <span class="hint">镜头越多，成片越长，消耗点数也越多。</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h3 class="card-title">生成档位</h3>
+              <p class="card-sub">决定花多少钱，以及成片有多清晰</p>
+            </div>
+          </div>
+          <div class="card-body">
+            {#
+              档位对成本的影响远大于镜头数：视频占总花费约 70%。
+              省钱模式不调用视频模型（改用本地动态合成），视频成本直接归零，
+              一次运行可以从几块钱降到一元以内 —— 适合调剧本、验证流程。
+              满意之后再用高保真档出终版。
+            #}
+            {% set tiers = [
+              ('auto',     '自动',     '按每个镜头的难度自动决定，有难度的才花钱', '推荐'),
+              ('draft',    '省钱模式', '本地动态合成，不调用视频模型，视频零成本', '最省'),
+              ('standard', '均衡',     '480P 真实视频模型', ''),
+              ('premium',  '最高质量', '720P 真实视频模型，成本约为均衡档的 2 倍', ''),
+              ('express',  '极速出片', '720P + 优速版模型：同画质，实测快 63%，价格贵 54%', '快')
+            ] %}
+            <div class="pick-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr))">
+              {% for value, name, desc, tag in tiers %}
+                {# 免费套餐不允许高保真档：既然后端会按套餐限权，
+                   界面就不该把选不了的选项摆出来让用户白点一次。 #}
+                {% if value not in ('premium', 'express') or plan.allow_premium_tier %}
+                  <label class="pick">
+                    <input type="radio" name="quality_tier" value="{{ value }}"
+                           {% if value == 'auto' %}checked{% endif %}>
+                    <span class="pick-body">
+                      <span class="pick-title">{{ name }}{% if tag %} <span class="badge badge-neutral">{{ tag }}</span>{% endif %}</span>
+                      <span class="pick-desc">{{ desc }}</span>
+                    </span>
+                  </label>
+                {% endif %}
+              {% endfor %}
+            </div>
+            {% if not plan.allow_premium_tier %}
+              <span class="hint">当前套餐不含高保真档位，升级后可解锁 720P 生成。</span>
+            {% endif %}
+          </div>
+        </section>
+      </div>
+
+      {# 额度预估 #}
+      <section class="card mt-4"
+               data-quote
+               data-quote-shots="{{ max_shots }}"
+               data-quote-credits="{{ quote.credits }}"
+               data-quote-usd="{{ quote.provider_cost_usd }}"
+               data-quote-balance="{{ org.credits_balance }}">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">额度预估</h3>
+            <p class="card-sub">以 {{ max_shots }} 镜为基准估算，实际以生成后的账单为准</p>
+          </div>
+          <span class="badge badge-neutral"><i class="dot"></i>预估</span>
+        </div>
+        <div class="card-body">
+          <dl class="meta-list">
+            <div class="meta-row">
+              <dt>预计消耗点数</dt>
+              <dd><strong data-quote-credits-out>{{ quote.credits|credits }}</strong> 点</dd>
+            </div>
+            <div class="meta-row">
+              <dt>其中：关键帧</dt>
+              <dd>{{ quote.breakdown.image|credits }} 点</dd>
+            </div>
+            <div class="meta-row">
+              <dt>其中：视频片段</dt>
+              <dd>{{ quote.breakdown.video|credits }} 点</dd>
+            </div>
+            <div class="meta-row">
+              <dt>其中：配音</dt>
+              <dd>{{ quote.breakdown.tts|credits }} 点</dd>
+            </div>
+            <div class="meta-row">
+              <dt>折算模型成本</dt>
+              <dd>$<span data-quote-usd-out>{{ '%.3f'|format(quote.provider_cost_usd) }}</span></dd>
+            </div>
+            <div class="meta-row">
+              <dt>当前可用额度</dt>
+              <dd>{{ org.credits_balance|credits }} 点</dd>
+            </div>
+          </dl>
+
+          <div class="alert alert-warn alert-inline hide" data-quote-warn>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>余额可能不足以完成本次生成，建议先<a href="/app/billing">升级套餐</a>或减少镜头数。任务失败时会自动全额退还额度。</span>
+          </div>
+
+          {% if not plan.allow_premium_tier %}
+            <p class="muted small mt-2">
+              当前套餐不支持高保真档位，成片带水印且不可商用；
+              <a href="/app/billing">升级后</a>自动去除水印。生成失败仍会全额退还额度。
+            </p>
+          {% endif %}
+        </div>
+        <div class="card-foot">
+          <span class="muted small">提交后立即入队，页面会跳转到实时进度。</span>
+          <button class="btn btn-primary btn-lg" type="submit">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 5 12 7-12 7V5Z" fill="currentColor"/></svg>
+            开始生成
+          </button>
+        </div>
+      </section>
+    </div>
+  </div>
+</form>
+
+<section class="card mt-4">
+  <div class="card-body">
+    <h3 class="card-title">生成前你需要知道的三件事</h3>
+    <div class="grid grid-3 mt-3">
+      <div>
+        <p class="ink mb-1"><strong>1. 会先做设定图</strong></p>
+        <p class="muted small mb-0">
+          系统先为角色与场景生成基准设定图（最多 {{ settings.max_base_images }} 张），
+          之后每个分镜都以它为参考，避免长视频里「换脸」与场景漂移。
+        </p>
+      </div>
+      <div>
+        <p class="ink mb-1"><strong>2. 中途可以取消</strong></p>
+        <p class="muted small mb-0">
+          在生成中页面点击取消，未执行的部分不消耗额度，已消耗部分如因失败产生会全额退还。
+        </p>
+      </div>
+      <div>
+        <p class="ink mb-1"><strong>3. 之后还能改</strong></p>
+        <p class="muted small mb-0">
+          成片出来后进入分镜工作室，可逐镜修改提示词并只重跑选中的镜头，费用按重跑量计算。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

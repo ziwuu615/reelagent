@@ -1,0 +1,145 @@
+# ============================================================================
+# ReelAgent API 工作负载
+#
+# 探针语义（与 reelagent_cloud/api/routes/system.py 的实现对齐，改路径前先看代码）：
+#   startupProbe  → /livez   冷启动最长容忍 150s（30 次 × 5s）
+#   livenessProbe → /livez   **不查数据库**：库抖动不该导致容器被重启，
+#                            那会把一次可自愈的依赖抖动放大成一次雪崩
+#   readinessProbe→ /readyz  查数据库 + 写一次存储探针文件；不通过则从 Endpoints 摘除
+#
+# ⚠ /readyz 每次调用都会往存储里 put + delete 一个探针文件。若用 s3 后端，
+#   探针周期就是"每个 Pod 每周期 2 次 S3 请求"，所以这里周期取 30s 而不是 10s，
+#   在"及时摘除坏实例"与"少烧钱少触发限流"之间取平衡。
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reelagent-api
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: reelagent
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 发布期间宁可多起一个 Pod，也不要让在途请求失败
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reelagent
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reelagent
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: reelagent
+      # 注意：envFrom 读的是 Pod 启动时的快照，改 ConfigMap/Secret **不会**
+      # 自动触发滚动更新。改完配置记得手动执行：
+      #     kubectl rollout restart deployment/reelagent-api -n reelagent
+    spec:
+      # ⚠ 必须大于 worker 的宽限期思路同理：给 uvicorn 时间把在途请求写完。
+      #   代码里没有独立的 shutdown_grace 配置，靠 SIGTERM → 优雅关闭 + preStop 兜底
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # 尽量把副本打散到不同节点，避免单节点故障带走全部实例
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: reelagent
+              app.kubernetes.io/component: api
+      containers:
+        - name: api
+          image: ghcr.io/CHANGE_ME_owner/reel-agent:1.0.0
+          imagePullPolicy: IfNotPresent
+          # 注意：镜像 ENTRYPOINT 是 tini、CMD 是 reelagent-server。
+          # 这里用 args 而不是 command，可以**保留 tini** 作为 1 号进程
+          # （回收僵尸进程 + 正确转发 SIGTERM）；用 command 会把 tini 顶掉。
+          # --workers 2：单 Pod 内两个 worker 进程，各自持有一份连接池，
+          #   算容量时是 POOL_SIZE × 2 × 副本数（别把数据库连接数算爆）。
+          args: ["reelagent-server", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: reelagent-config
+            - secretRef:
+                name: reelagent-secrets
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30      # 5s × 30 = 最长 150s 冷启动
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # 让 kube-proxy / Ingress 先把本 Pod 从 Endpoints 摘掉再收连接，
+                # 早退 5 秒能消掉滚动更新期间绝大部分 502
+                command: ["/bin/sh", "-c", "sleep 5"]
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              # 内存上限要覆盖一次大图/大文件上传与 Jinja 渲染峰值
+              cpu: "1"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # 引擎与本地存储后端的工作目录（配置里 REEL_WORKSPACE_DIR=/app/workspace）。
+            # 默认用 emptyDir：s3 后端下这里只放临时文件，Pod 重启即清空，正合适。
+            # 若改用 local 存储后端，必须换成下方注释里的 PVC，
+            # 并且把 api/worker 都固定为 1 副本、确保挂到同一节点（详见 configmap 注释）。
+            - name: workspace
+              mountPath: /app/workspace
+            # readOnlyRootFilesystem=true 时唯一还需要可写的地方就是 /tmp
+            # （Python 临时文件、ffmpeg 中间产物、Pillow 缓存都落这里）
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 20Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 4Gi
+        # ---- local 存储方案：改用 PVC（同时删掉上面的 workspace emptyDir）----
+        # - name: workspace
+        #   persistentVolumeClaim:
+        #     claimName: reelagent-workspace

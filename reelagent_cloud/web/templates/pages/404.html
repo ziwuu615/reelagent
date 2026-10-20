@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% set layout = 'site' %}
+{% block title %}页面不存在 · {{ product_name }}{% endblock %}
+{% block description %}你访问的页面不存在或已被移除。{% endblock %}
+
+{% block site_content %}
+<section class="container">
+  <div class="error-page">
+    <p class="error-code">404</p>
+    <h1 class="mt-2">这个页面不存在</h1>
+    <p class="lede">
+      链接可能已经失效，或者地址里有拼写错误。如果你是从站内跳转过来的，
+      那多半是我们的问题——麻烦告知 <a href="mailto:{{ support_email }}">{{ support_email }}</a>，
+      我们会尽快修好。
+    </p>
+
+    <div class="btn-row" style="justify-content: center">
+      <a class="btn btn-primary btn-lg" href="{{ '/app' if principal else '/' }}">
+        {{ '回到控制台' if principal else '回到首页' }}
+      </a>
+      {% if principal %}
+        <a class="btn btn-ghost btn-lg" href="/app/projects">我的成片</a>
+      {% else %}
+        <a class="btn btn-ghost btn-lg" href="/pricing">查看定价</a>
+      {% endif %}
+      <a class="btn btn-ghost btn-lg" href="/status">系统状态</a>
+    </div>
+
+    <div class="grid grid-3 mt-5" style="text-align: left">
+      <div class="card">
+        <div class="card-body">
+          <h3 class="card-title">想找成片？</h3>
+          <p class="muted small mt-1 mb-0">登录后进入「我的成片」，按状态或关键词搜索历史项目。</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <h3 class="card-title">想调 API？</h3>
+          <p class="muted small mt-1 mb-0">
+            接口文档在 <a href="{{ settings.docs_url }}">{{ settings.docs_url }}</a>，
+            密钥可在组织设置中创建。
+          </p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <h3 class="card-title">怀疑是故障？</h3>
+          <p class="muted small mt-1 mb-0">
+            <a href="/status">状态页</a>实时展示依赖健康与队列深度，可先确认是否服务异常。
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

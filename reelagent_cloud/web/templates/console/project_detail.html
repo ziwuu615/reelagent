@@ -1,0 +1,436 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}{{ project.title or '成片详情' }} · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/app/projects">我的成片</a><span>/</span><span>{{ project.id }}</span></div>
+    <h1>{{ project.title or '未命名成片' }}</h1>
+    <p class="lede">
+      {% set status = project.status %}{% set label = none %}
+      {% include 'partials/badge.html' %}
+      <span class="muted">· {{ project.style }} · {{ project.aspect_ratio }} · 创建于 {{ project.created_at|dt }}</span>
+    </p>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-ghost" href="/app/projects/{{ project.id }}/studio">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z" stroke="currentColor" stroke-width="1.8"/><path d="M4 12h16M9 6v12" stroke="currentColor" stroke-width="1.8"/></svg>
+      分镜工作室
+    </a>
+    {% if final %}
+      <a class="btn btn-ghost" href="/api/v1/artifacts/{{ final.id }}/download?disposition=attachment">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4.5-4.5M12 15l-4.5-4.5M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        下载成片
+      </a>
+    {% endif %}
+    <form method="post" action="/app/projects/{{ project.id }}/cancel" class="inline-form"
+          data-confirm="确认取消当前生成任务？未消耗的额度将自动退还。">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn btn-danger" type="submit">取消生成</button>
+    </form>
+  </div>
+</div>
+
+{# 进行中 / 失败时的进度与错误 #}
+{% if latest_job and (project.status.value in ['queued', 'running'] or project.status.value == 'failed') %}
+  {% if project.status.value == 'failed' %}
+    <div class="alert alert-error" role="alert">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>
+        生成失败{% if latest_job.error %}：{{ latest_job.error }}{% endif %}。
+        本次预扣的 {{ project.credits_spent|credits }} 点已按规则退还，可在<a href="/app/usage">用量页</a>核对。
+      </span>
+    </div>
+  {% endif %}
+  <div class="mb-4">
+    {% set job = latest_job %}{% set cancel_action = '/app/projects/' ~ project.id ~ '/cancel' %}
+    {% include 'partials/job_progress.html' %}
+  </div>
+{% endif %}
+
+<div class="grid grid-2-1">
+  {# 成片播放器 #}
+  <div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">成片</h3>
+          <p class="card-sub">
+            {% if final %}
+              {{ final.filename }} · {{ final.size_bytes|bytes }} · 生成于 {{ final.created_at|dt }}
+            {% else %}
+              尚未产出可播放的成片
+            {% endif %}
+          </p>
+        </div>
+        {% if final %}
+          <div class="card-head-actions">
+            <button type="button" class="btn btn-soft btn-sm" data-copy="#share-hint" data-copy-label="复制分享提示">
+              复制信息
+            </button>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="card-body">
+        {% if final %}
+          <div class="player{% if project.aspect_ratio == '9:16' %} player-portrait{% endif %}">
+            {% if final.kind.value == 'gif' %}
+              <img src="/files/{{ final.storage_key }}" alt="成片预览">
+            {% else %}
+              <video controls playsinline preload="metadata" src="/files/{{ final.storage_key }}"></video>
+            {% endif %}
+          </div>
+          <div class="player-actions">
+            <a class="btn btn-primary btn-sm" href="/api/v1/artifacts/{{ final.id }}/download?disposition=attachment">下载 MP4</a>
+            <a class="btn btn-ghost btn-sm" href="/files/{{ final.storage_key }}" target="_blank" rel="noopener">在新窗口打开</a>
+            {% if audio %}
+              <a class="btn btn-ghost btn-sm" href="/files/{{ audio.storage_key }}" target="_blank" rel="noopener">单独下载配音</a>
+            {% endif %}
+          </div>
+          <p class="muted small mt-2" id="share-hint">
+            文件地址：{{ base_url }}/files/{{ final.storage_key }}
+            {% if org.watermark %}· 当前套餐成片带水印，升级后自动去除。{% endif %}
+          </p>
+        {% else %}
+          <div class="player player-empty">
+            <div>
+              <svg class="icon" viewBox="0 0 24 24" width="30" height="30" style="margin: 0 auto 10px" aria-hidden="true"><path d="M4 5h16v14H4z" stroke="currentColor" stroke-width="1.6"/><path d="m10 9.5 5 2.5-5 2.5v-5Z" fill="currentColor"/></svg>
+              <p class="mb-1">暂无成片文件</p>
+              <p class="small mb-0">
+                {% if project.status.value in ['queued', 'running'] %}
+                  生成完成后这里会自动出现播放器。
+                {% else %}
+                  可在分镜工作室调整提示词后重跑镜头。
+                {% endif %}
+              </p>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    {# 分镜九宫格 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">分镜九宫格</h3>
+          <p class="card-sub">
+            共 {{ shots|length }} 个镜头，已完成 {{ project.finished_shots }} 个
+            {% if storyboard %}· 已生成拼版预览{% endif %}
+          </p>
+        </div>
+        {% if storyboard %}
+          <a class="btn btn-soft btn-sm" href="/files/{{ storyboard.storage_key }}" target="_blank" rel="noopener">查看拼版大图</a>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        {% if shots %}
+          <div class="storyboard">
+            {% for shot in shots %}
+              {% set frame = keyframes.get(shot.shot_key) %}
+              <figure class="shot-tile" style="margin: 0">
+                <div class="shot-tile-media">
+                  {% if frame %}
+                    <img src="/files/{{ frame.storage_key }}" alt="{{ shot.shot_key }} 关键帧" loading="lazy">
+                  {% else %}
+                    <span class="ph">
+                      <svg class="icon" viewBox="0 0 24 24" width="22" height="22" style="margin: 0 auto 6px" aria-hidden="true"><path d="M4 5h16v14H4z" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><path d="m5 17 4.5-4 3 2.5L16 12l3 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+                      待生成
+                    </span>
+                  {% endif %}
+                </div>
+                <figcaption class="shot-tile-meta">
+                  <span class="shot-tile-key">{{ shot.shot_key }} · {{ shot.shot_size|shot_size }}{% if shot.camera %} · {{ shot.camera }}{% endif %}</span>
+                  <span class="shot-tile-action">{{ shot.action or shot.narration or '（无动作描述）' }}</span>
+                </figcaption>
+              </figure>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty" style="padding: 28px 10px">
+            <p class="empty-title">还没有分镜数据</p>
+            <p class="muted small">剧本拆解完成后，分镜会显示在这里。</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    {# 镜头表 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">镜头表</h3>
+          <p class="card-sub">景别、运镜、时长、供应商与单镜成本</p>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="/app/projects/{{ project.id }}/studio">编辑提示词</a>
+      </div>
+      {% if shots %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col">镜头</th>
+                <th scope="col">景别 / 运镜</th>
+                <th scope="col">内容</th>
+                <th scope="col" class="num">时长</th>
+                <th scope="col">供应商</th>
+                <th scope="col" class="num">点数</th>
+                <th scope="col">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for shot in shots %}
+                <tr>
+                  <td class="mono tight">{{ shot.shot_key }}</td>
+                  <td class="tight">{{ shot.shot_size|shot_size }}{% if shot.camera %} / {{ shot.camera }}{% endif %}</td>
+                  <td>
+                    <span class="cell-title">{{ (shot.action or shot.narration or '—')|truncate(64, true) }}</span>
+                    {% if shot.dialogue %}<span class="cell-sub">台词：{{ shot.dialogue|truncate(46, true) }}</span>{% endif %}
+                    {% if shot.error %}<span class="cell-sub" style="color:var(--bad)">{{ shot.error|truncate(60, true) }}</span>{% endif %}
+                  </td>
+                  <td class="num">{{ shot.duration_s|duration }}</td>
+                  <td class="tight muted">
+                    {% if shot.provider %}{{ shot.provider }}{% if shot.model %}<span class="cell-sub mono">{{ shot.model }}</span>{% endif %}{% else %}—{% endif %}
+                  </td>
+                  <td class="num">{{ shot.credits|credits }}</td>
+                  <td>
+                    {% if shot.status in ['succeeded', 'ready', 'done'] %}
+                      <span class="badge badge-ok"><i class="dot"></i>完成</span>
+                    {% elif shot.status in ['running', 'generating'] %}
+                      <span class="badge badge-busy"><i class="dot"></i>生成中</span>
+                    {% elif shot.status in ['failed', 'dead'] %}
+                      <span class="badge badge-bad"><i class="dot"></i>失败</span>
+                    {% else %}
+                      <span class="badge badge-muted"><i class="dot"></i>待生成</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="card-body">
+          <div class="empty" style="padding: 26px 10px">
+            <p class="empty-title">镜头表为空</p>
+            <p class="muted small">开始生成后，这里会列出每个镜头的详细参数。</p>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  </div>
+
+  {# 右栏：元信息 / 评测 / 成本 / 产物 #}
+  <div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">项目信息</h3>
+          <p class="card-sub">项目编号 {{ project.id }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <dl class="meta-list">
+          <div class="meta-row"><dt>风格</dt><dd>{{ project.style }}</dd></div>
+          <div class="meta-row"><dt>画幅</dt><dd>{{ project.aspect_ratio }}</dd></div>
+          <div class="meta-row"><dt>镜头数</dt><dd>{{ project.finished_shots }} / {{ project.total_shots or shots|length or '—' }}</dd></div>
+          <div class="meta-row"><dt>成片时长</dt><dd>{{ project.duration_seconds|duration }}</dd></div>
+          <div class="meta-row"><dt>样式水印</dt><dd>{{ '有' if org.watermark else '无' }}</dd></div>
+          <div class="meta-row"><dt>创建时间</dt><dd>{{ project.created_at|dt }}</dd></div>
+          <div class="meta-row"><dt>最近更新</dt><dd>{{ project.updated_at|relative }}</dd></div>
+          <div class="meta-row"><dt>引擎项目号</dt><dd class="mono">{{ project.engine_project_id or '—' }}</dd></div>
+        </dl>
+
+        <details class="mt-3">
+          <summary class="muted small" style="cursor:pointer">查看原始素材</summary>
+          <p class="small mt-2" style="white-space: pre-wrap">{{ project.seed_text }}</p>
+        </details>
+      </div>
+    </section>
+
+    {# 评测指标 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">一致性评测</h3>
+          <p class="card-sub">跨镜头不换脸、不漂移的量化结果</p>
+        </div>
+      </div>
+      <div class="card-body">
+        {% set metrics = evaluation.get('metrics') or {} %}
+        {% set judge = evaluation.get('judge') or {} %}
+        {% set gate = evaluation.get('gate') or {} %}
+        {% if metrics %}
+          <dl class="meta-list">
+            <div class="meta-row"><dt>综合分</dt><dd><strong>{{ metrics.get('overall')|percent(1) }}</strong></dd></div>
+            <div class="meta-row"><dt>色调稳定性</dt><dd>{{ metrics.get('palette_stability')|percent(1) }}</dd></div>
+            <div class="meta-row"><dt>跨镜头线索相似度</dt><dd>{{ metrics.get('cross_shot_clue_similarity')|percent(1) }}</dd></div>
+            <div class="meta-row"><dt>基准图注入覆盖率</dt><dd>{{ metrics.get('clue_reference_coverage')|percent(1) }}</dd></div>
+            <div class="meta-row"><dt>提示词线索保真度</dt><dd>{{ metrics.get('prompt_clue_fidelity')|percent(1) }}</dd></div>
+            <div class="meta-row">
+              <dt>一致性策略生效</dt>
+              <dd>{{ '是' if metrics.get('consistency_strategy_active') else '否' }}</dd>
+            </div>
+            {% if judge %}
+              <div class="meta-row"><dt>LLM 评审总分</dt><dd>{{ judge.get('overall')|percent(1) }}</dd></div>
+            {% endif %}
+          </dl>
+        {% else %}
+          <p class="muted small">尚无评测数据。任务完成评测阶段后，这里会给出量化指标。</p>
+        {% endif %}
+
+        {% if gate is defined and gate %}
+          <div class="mt-3">
+            <span class="badge badge-{{ 'ok' if gate.get('passed') else 'bad' }}">
+              <i class="dot"></i>质量门禁{{ '通过' if gate.get('passed') else '未通过' }}
+            </span>
+            {% for failure in gate.get('failures') or [] %}
+              <p class="muted small mt-2 mb-0">· {{ failure }}</p>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    {# 成本明细 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">成本明细</h3>
+          <p class="card-sub">按类别聚合的供应商真实成本</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <dl class="meta-list">
+          <div class="meta-row"><dt>消耗点数</dt><dd><strong>{{ project.credits_spent|credits }}</strong> 点</dd></div>
+          <div class="meta-row"><dt>模型成本合计</dt><dd>${{ '%.4f'|format(project.provider_cost_usd or 0) }}</dd></div>
+          <div class="meta-row"><dt>明细合计</dt><dd>${{ '%.4f'|format(cost.get('total_usd') or 0) }}</dd></div>
+        </dl>
+
+        {% set by_category = cost.get('by_category') or {} %}
+        {% if by_category %}
+          <div class="mt-3">
+            {% set cat_names = {'image': '关键帧', 'video': '视频片段', 'tts': '配音', 'llm': '剧本与评审', 'render': '合成', 'other': '其他'} %}
+            {% for cat, info in by_category.items() %}
+              <div class="flex-between mt-2">
+                <span class="small ink">{{ cat_names.get(cat, cat) }}</span>
+                <span class="small muted">${{ '%.4f'|format(info.usd or 0) }}</span>
+              </div>
+              <div class="progress mt-1"><div class="progress-fill tone-neutral" style="width: {{ ((info.usd or 0) / (cost.get('total_usd') or 1) * 100)|round(1) }}%"></div></div>
+              {% for item in info.get('items') or [] %}
+                <p class="muted small mb-0 mt-1">
+                  {{ item.provider }}{% if item.model %} · {{ item.model }}{% endif %}
+                  · {{ item.calls }} 次调用 · {{ item.quantity }} {{ item.unit }} · ${{ '%.4f'|format(item.usd or 0) }}
+                </p>
+              {% endfor %}
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="muted small mt-2">尚未产生成本记录。</p>
+        {% endif %}
+      </div>
+    </section>
+
+    {# 产物清单 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">产物清单</h3>
+          <p class="card-sub">关键帧、成片、配音与报告</p>
+        </div>
+      </div>
+      {% if artifacts %}
+        <div class="card-body">
+          <div class="thumbs">
+            {% for art in artifacts %}
+              {% if art.kind.value in ['keyframe', 'base_image', 'storyboard'] %}
+                <figure class="thumb" style="margin: 0">
+                  <a href="/files/{{ art.storage_key }}" target="_blank" rel="noopener">
+                    <img src="/files/{{ art.storage_key }}" alt="{{ art.filename }}" loading="lazy">
+                  </a>
+                  <figcaption class="thumb-cap">{{ art.filename|truncate(18, true) }}</figcaption>
+                </figure>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col">文件</th>
+                <th scope="col">类型</th>
+                <th scope="col" class="num">大小</th>
+                <th scope="col" class="num">下载</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for art in artifacts %}
+                <tr>
+                  <td class="break">{{ art.filename }}</td>
+                  <td><span class="tag">{{ art.kind.value }}</span></td>
+                  <td class="num">{{ art.size_bytes|bytes }}</td>
+                  <td class="num"><a href="/api/v1/artifacts/{{ art.id }}/download?disposition=attachment">下载</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="card-body">
+          <p class="muted small mb-0">暂无可下载的产物。</p>
+        </div>
+      {% endif %}
+    </section>
+
+    {# 任务历史 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">任务历史</h3>
+          <p class="card-sub">最近 {{ jobs|length }} 条</p>
+        </div>
+      </div>
+      {% if jobs %}
+        <div class="card-body" style="display: grid; gap: 12px">
+          {% for job in jobs %}
+            <div>
+              <div class="flex-between">
+                <span class="mono small">{{ job.id|truncate(18, true) }}</span>
+                {% set status = job.status %}{% set label = none %}
+                {% include 'partials/badge.html' %}
+              </div>
+              <p class="muted small mb-0 mt-1">
+                {{ job.kind.value }} · {{ job.stage|stage_label }} · {{ (job.progress * 100)|round(0) }}%
+                · {{ job.created_at|dt }}
+                {% if job.attempts %}· 尝试 {{ job.attempts }}/{{ job.max_attempts }}{% endif %}
+              </p>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="card-body"><p class="muted small mb-0">暂无任务记录。</p></div>
+      {% endif %}
+    </section>
+
+    {# 危险操作 #}
+    <section class="card danger-zone mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">删除项目</h3>
+          <p class="card-sub">删除后成片、分镜与关键帧将一并清除</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <form method="post" action="/app/projects/{{ project.id }}/delete"
+              data-confirm="确认删除该项目？成片与所有分镜文件都会被清除，此操作不可撤销。">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-danger-solid" type="submit">删除该项目</button>
+        </form>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

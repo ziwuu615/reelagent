@@ -1,0 +1,91 @@
+# ============================================================================
+# ReelAgent Ingress（域名 + HTTPS）
+#
+# 前置条件：
+#   1) 集群里有 ingress-nginx（或其它 Ingress Controller）；
+#   2) 有 cert-manager + ClusterIssuer（下面用 letsencrypt-prod），
+#      它会自动申请并续期证书；没有 cert-manager 就自己上传 TLS Secret，
+#      然后删掉 cert-manager.io/* 两行注解。
+#
+# 域名准备：把 reelagent.example.com 的 A 记录指向 Ingress Controller 的
+# 公网 IP（云上通常是 LoadBalancer Service 的地址），等解析生效再申请证书；
+# 解析没生效时 Let's Encrypt 的 HTTP-01 校验会一直失败。
+# ============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reelagent
+  namespace: reelagent
+  labels:
+    app.kubernetes.io/name: reelagent
+    app.kubernetes.io/part-of: reelagent
+  annotations:
+    # ---- TLS 证书自动签发与续期 ----
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # ---- 上传体积：必须与 REEL_STORAGE__MAX_UPLOAD_MB 匹配 ----
+    # 默认 nginx 只允许 1m，不改的话用户上传稍大的素材就会 413
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    # ---- 视频下载/长任务响应会把连接挂很久，超时要放宽 ----
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # ---- 让后端拿到真实的客户端 IP 与协议 ----
+    # 不配的话限流会把所有请求都算到 Ingress 那一个 IP 上，等于限流失效
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+    nginx.ingress.kubernetes.io/forwarded-for-header: "X-Forwarded-For"
+    # ---- HTTP 强制跳 HTTPS ----
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # ---- 面向公网的服务，关掉不必要的目录探测噪音 ----
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - reelagent.example.com
+      # cert-manager 会把签好的证书写进这个 Secret（可自动创建）
+      secretName: reelagent-tls
+  rules:
+    - host: reelagent.example.com
+      http:
+        paths:
+          # 单入口即可：/livez /readyz /health /metrics /api/v1 /app /webhooks
+          # 都在同一个 FastAPI 应用里，不需要按路径拆分。
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reelagent-api
+                port:
+                  name: http
+---
+# ============================================================================
+# 可选：把 www 子域也指过来（证书里需要同时包含两个域名）。
+# 不需要就直接删掉这一段。
+# ============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reelagent-www
+  namespace: reelagent
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # 301 到主域，避免同一份内容挂在两个域名下（对 SEO 与 Cookie 域都不友好）
+    nginx.ingress.kubernetes.io/permanent-redirect: "https://reelagent.example.com$request_uri"
+    nginx.ingress.kubernetes.io/permanent-redirect-code: "301"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - www.reelagent.example.com
+      secretName: reelagent-tls-www
+  rules:
+    - host: www.reelagent.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reelagent-api
+                port:
+                  name: http

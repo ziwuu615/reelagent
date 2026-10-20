@@ -1,0 +1,376 @@
+{% extends 'base.html' %}
+{% set layout = 'console' %}
+{% block title %}组织设置 · {{ product_name }}{% endblock %}
+
+{% block console_content %}
+{% set is_admin = principal.role.rank >= 2 %}
+
+<div class="page-head">
+  <div>
+    <h1>组织设置</h1>
+    <p class="lede">
+      {{ org.name }} · 你是 {{ {'owner': '拥有者', 'admin': '管理员', 'member': '成员'}.get(principal.role.value, principal.role.value) }}
+      {% if not is_admin %}· 敏感操作需要管理员权限{% endif %}
+    </p>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-ghost" href="/app/usage">额度流水</a>
+    <a class="btn btn-ghost" href="{{ settings.docs_url }}">API 文档</a>
+  </div>
+</div>
+
+{# 新建密钥后的明文展示：只在本次响应中出现一次 #}
+{% if new_key %}
+  <section class="card mb-4">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title">新密钥已生成</h3>
+        <p class="card-sub">这是唯一一次可以看到完整密钥的机会，关闭页面后无法再次查看</p>
+      </div>
+      <span class="badge badge-busy"><i class="dot"></i>请立即保存</span>
+    </div>
+    <div class="card-body">
+      <div class="copy-field">
+        <input type="text" id="new-api-key" class="mono" value="{{ new_key }}" readonly aria-label="新建的 API Key">
+        <button type="button" class="btn btn-primary" data-copy="#new-api-key" data-copy-label="复制密钥">复制密钥</button>
+      </div>
+      <p class="muted small mt-2 mb-0">
+        服务端只保存该密钥的哈希与可识别前缀，我们无法为你找回明文。
+        若已丢失，请撤销后重新创建。
+      </p>
+    </div>
+  </section>
+{% endif %}
+
+{# 组织信息 #}
+<section class="card mb-4">
+  <div class="card-head">
+    <div>
+      <h3 class="card-title">组织信息</h3>
+      <p class="card-sub">名称用于账单与团队识别；默认风格决定新建项目的初始选项</p>
+    </div>
+  </div>
+  <div class="card-body">
+    <form method="post" action="/app/settings/org">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="org-name">组织名称</label>
+          <input type="text" id="org-name" name="name" value="{{ org.name }}" maxlength="120"
+                 {% if not is_admin %}disabled{% endif %} required>
+          <span class="hint">建议使用团队或品牌名，会出现在账单与导出文件中。</span>
+        </div>
+        <div class="field">
+          <label for="org-style">默认风格</label>
+          <select id="org-style" name="default_style" {% if not is_admin %}disabled{% endif %}>
+            {% set style_names = {'cinematic': '电影感', 'anime': '日式动画', 'cyberpunk': '赛博朋克', 'ink': '水墨', 'realistic': '写实记录'} %}
+            {% for key in style_names %}
+              <option value="{{ key }}"{% if key == org.default_style %} selected{% endif %}>{{ style_names[key] }}</option>
+            {% endfor %}
+          </select>
+          <span class="hint">新建项目时会预选该风格，仍可在项目里单独更换。</span>
+        </div>
+      </div>
+
+      <div class="grid grid-3 mt-3">
+        <div class="meta-row"><dt>组织编号</dt><dd class="mono">{{ org.id }}</dd></div>
+        <div class="meta-row"><dt>识别短链</dt><dd class="mono">{{ org.slug }}</dd></div>
+        <div class="meta-row"><dt>计费周期起始</dt><dd>{{ org.period_started_at|dt('%Y-%m-%d') }}</dd></div>
+      </div>
+
+      <div class="btn-row mt-3">
+        <button class="btn btn-primary" type="submit" {% if not is_admin %}disabled{% endif %}>保存组织信息</button>
+        {% if not is_admin %}<span class="muted small">需要管理员或拥有者权限</span>{% endif %}
+      </div>
+    </form>
+  </div>
+</section>
+
+<div class="grid grid-2-1">
+  <div>
+    {# API Key #}
+    <section class="card mb-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">API Key</h3>
+          <p class="card-sub">
+            用于以程序方式调用
+            <span class="mono">{{ base_url }}/api/v1/*</span>
+          </p>
+        </div>
+        <span class="badge {{ 'badge-ok' if api_keys else 'badge-muted' }}"><i class="dot"></i>{{ api_keys|length }} 把</span>
+      </div>
+
+      {% if api_keys %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col">名称</th>
+                <th scope="col">前缀</th>
+                <th scope="col">权限</th>
+                <th scope="col">最近使用</th>
+                <th scope="col" class="num">调用次数</th>
+                <th scope="col">状态</th>
+                <th scope="col"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for key in api_keys %}
+                <tr>
+                  <td>
+                    <span class="cell-title">{{ key.name or '未命名密钥' }}</span>
+                    <span class="cell-sub">创建于 {{ key.created_at|dt }}</span>
+                  </td>
+                  <td class="mono tight">{{ mask(key.prefix) }}</td>
+                  <td class="tight">
+                    {% for scope in key.scopes %}<span class="tag">{{ scope }}</span>{% endfor %}
+                  </td>
+                  <td class="tight muted">
+                    {% if key.last_used_at %}
+                      {{ key.last_used_at|relative }}
+                      {% if key.last_used_ip %}<span class="cell-sub mono">{{ key.last_used_ip }}</span>{% endif %}
+                    {% else %}
+                      从未使用
+                    {% endif %}
+                  </td>
+                  <td class="num">{{ key.request_count|credits }}</td>
+                  <td>
+                    {% if key.is_active %}
+                      <span class="badge badge-ok"><i class="dot"></i>生效中</span>
+                    {% else %}
+                      <span class="badge badge-muted"><i class="dot"></i>{{ '已撤销' if key.revoked_at else '已过期' }}</span>
+                    {% endif %}
+                  </td>
+                  <td class="right">
+                    {% if key.is_active %}
+                      <form method="post" action="/app/settings/api-keys/{{ key.id }}/revoke" class="inline-form"
+                            data-confirm="撤销后使用该密钥的集成会立即失效，确认撤销？">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="btn btn-danger btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>撤销</button>
+                      </form>
+                    {% else %}
+                      <span class="muted small">—</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="card-body">
+          <p class="muted small mb-0">还没有创建任何密钥。生成后请立即复制，明文只展示一次。</p>
+        </div>
+      {% endif %}
+
+      <div class="card-foot">
+        <form method="post" action="/app/settings/api-keys" class="flex-center grow" style="gap:10px">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="hide" for="key-name">密钥名称</label>
+          <input type="text" id="key-name" name="name" maxlength="80" placeholder="密钥名称，例如：剪辑脚本"
+                 style="max-width:280px" {% if not is_admin %}disabled{% endif %}>
+          <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>创建密钥</button>
+        </form>
+        {% if not is_admin %}<span class="muted small">需要管理员权限</span>{% endif %}
+      </div>
+    </section>
+
+    {# BYOK #}
+    <section class="card mb-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">自带密钥（BYOK）</h3>
+          <p class="card-sub">用自己的模型额度出片，平台只收取编排与评测的点数</p>
+        </div>
+        {% if not settings.providers.allow_byok %}
+          <span class="badge badge-muted"><i class="dot"></i>本部署未开放</span>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        <div class="grid grid-3 mb-3">
+          <div class="meta-row"><dt>视频模型</dt><dd>{{ '已配置' if byok_status.get('video') else '未配置' }}</dd></div>
+          <div class="meta-row"><dt>图像模型</dt><dd>{{ '已配置' if byok_status.get('image') else '未配置' }}</dd></div>
+          <div class="meta-row"><dt>语言模型</dt><dd>{{ '已配置' if byok_status.get('llm') else '未配置' }}</dd></div>
+        </div>
+
+        <form method="post" action="/app/settings/byok">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="grid grid-3">
+            <div class="field">
+              <label for="byok-video">视频模型密钥</label>
+              <input type="password" id="byok-video" name="video_key" autocomplete="off"
+                     placeholder="{{ '已配置，留空则不修改' if byok_status.get('video') else '粘贴视频模型的 API Key' }}"
+                     {% if not is_admin or not settings.providers.allow_byok %}disabled{% endif %}>
+            </div>
+            <div class="field">
+              <label for="byok-image">图像模型密钥</label>
+              <input type="password" id="byok-image" name="image_key" autocomplete="off"
+                     placeholder="{{ '已配置，留空则不修改' if byok_status.get('image') else '粘贴图像模型的 API Key' }}"
+                     {% if not is_admin or not settings.providers.allow_byok %}disabled{% endif %}>
+            </div>
+            <div class="field">
+              <label for="byok-llm">语言模型密钥</label>
+              <input type="password" id="byok-llm" name="llm_key" autocomplete="off"
+                     placeholder="{{ '已配置，留空则不修改' if byok_status.get('llm') else '粘贴语言模型的 API Key' }}"
+                     {% if not is_admin or not settings.providers.allow_byok %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="btn-row mt-3">
+            <button class="btn btn-primary" type="submit"
+                    {% if not is_admin or not settings.providers.allow_byok %}disabled{% endif %}>
+              保存密钥
+            </button>
+            <span class="muted small">密钥加密后落库，界面只显示配置状态，任何接口都不会明文回传。</span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    {# 成员 #}
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">团队成员</h3>
+          <p class="card-sub">{{ plan.name }}最多 {{ plan.max_org_members }} 人 · 当前 {{ members|length }} 人</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">成员</th>
+              <th scope="col">角色</th>
+              <th scope="col">加入时间</th>
+              <th scope="col">最近活跃</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for membership, member in members %}
+              <tr>
+                <td>
+                  <span class="cell-title">{{ member.display_name or member.email }}</span>
+                  <span class="cell-sub">{{ member.email }}</span>
+                </td>
+                <td>
+                  <span class="tag">{{ {'owner': '拥有者', 'admin': '管理员', 'member': '成员'}.get(membership.role.value, membership.role.value) }}</span>
+                </td>
+                <td class="tight muted">{{ membership.created_at|dt('%Y-%m-%d') }}</td>
+                <td class="tight muted">{{ membership.last_active_at|relative }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card-foot">
+        <form method="post" action="/app/settings/members" class="flex-center grow" style="gap:10px;flex-wrap:wrap">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="hide" for="member-email">成员邮箱</label>
+          <input type="email" id="member-email" name="email" placeholder="成员邮箱" required
+                 style="max-width:260px" {% if not is_admin %}disabled{% endif %}>
+          <label class="hide" for="member-role">角色</label>
+          <select id="member-role" name="role" style="width:auto" {% if not is_admin %}disabled{% endif %}>
+            <option value="member">成员</option>
+            <option value="admin">管理员</option>
+          </select>
+          <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>添加成员</button>
+        </form>
+        {% if not is_admin %}<span class="muted small">需要管理员权限</span>{% endif %}
+      </div>
+    </section>
+  </div>
+
+  {# 右栏 #}
+  <div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">当前账号</h3>
+          <p class="card-sub">浏览器会话身份</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <dl class="meta-list">
+          <div class="meta-row"><dt>邮箱</dt><dd>{{ principal.user.email }}</dd></div>
+          <div class="meta-row"><dt>显示名称</dt><dd>{{ principal.user.display_name or '—' }}</dd></div>
+          <div class="meta-row"><dt>组织角色</dt><dd>{{ {'owner': '拥有者', 'admin': '管理员', 'member': '成员'}.get(principal.role.value, principal.role.value) }}</dd></div>
+          <div class="meta-row"><dt>界面语言</dt><dd>{{ principal.user.locale }}</dd></div>
+          <div class="meta-row"><dt>最近登录</dt><dd>{{ principal.user.last_login_at|relative }}</dd></div>
+          <div class="meta-row"><dt>会话代际</dt><dd>v{{ principal.user.session_version }}</dd></div>
+        </dl>
+        <p class="muted small mt-3 mb-0">
+          「登出所有设备」会让所有已签发的会话立即失效——密码疑似泄漏时请立即使用。
+        </p>
+      </div>
+      <div class="card-foot">
+        <form method="post" action="/logout-all" class="inline-form"
+              data-confirm="确认登出所有设备？其他设备上的会话会立即失效，需要重新登录。">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-danger btn-sm" type="submit">登出所有设备</button>
+        </form>
+        <form method="post" action="/logout" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-ghost btn-sm" type="submit">退出当前会话</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">套餐与额度</h3>
+          <p class="card-sub">{{ plan.name }}</p>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="/app/billing">管理</a>
+      </div>
+      <div class="card-body">
+        <dl class="meta-list">
+          <div class="meta-row"><dt>可用额度</dt><dd>{{ org.credits_balance|credits }} 点</dd></div>
+          <div class="meta-row"><dt>单条镜头上限</dt><dd>{{ plan.max_shots_per_project }} 个</dd></div>
+          <div class="meta-row"><dt>并发任务</dt><dd>{{ plan.max_concurrent_jobs }} 个</dd></div>
+          <div class="meta-row"><dt>成片水印</dt><dd>{{ '有' if org.watermark else '无' }}</dd></div>
+          <div class="meta-row"><dt>商用授权</dt><dd>{{ '支持' if plan.commercial_use else '不支持' }}</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">调用示例</h3>
+          <p class="card-sub">创建密钥后即可使用</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="mono small mb-2" style="white-space: pre-wrap">curl {{ base_url }}/api/v1/projects \
+  -H "x-api-key: $REEL_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"seed_text": "深夜的便利店只剩下最后一盏灯", "style": "cinematic", "shots": 6}'</p>
+        <p class="muted small mb-0">
+          任务详情接口 <span class="mono">/api/v1/jobs/{id}</span> 可用于轮询进度；
+          完整参数见 <a href="{{ settings.docs_url }}">API 文档</a>。
+        </p>
+      </div>
+    </section>
+
+    <section class="card mt-4 danger-zone">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">危险区域</h3>
+          <p class="card-sub">删除组织与全部数据</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="muted small">
+          删除组织会一并清除全部项目、成片、分镜、密钥与成员关系，且不可恢复。
+          为避免误操作，请通过邮件申请，我们会核验身份后处理。
+        </p>
+        <a class="btn btn-danger-solid btn-sm" href="mailto:{{ support_email }}?subject=%E7%94%B3%E8%AF%B7%E6%B3%A8%E9%94%80%E7%BB%84%E7%BB%87">申请注销组织</a>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

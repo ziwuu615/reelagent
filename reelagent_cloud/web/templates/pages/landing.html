@@ -1,0 +1,252 @@
+{% extends 'base.html' %}
+{% set layout = 'site' %}
+{% set topnav_active = 'features' %}
+{% block title %}{{ product_name }} · 把一段文字变成成片的 AI 短视频平台{% endblock %}
+{% block description %}输入一段文字，{{ product_name }} 自动拆解剧本、生成角色基准图、逐镜出片并做一致性评测。跨镜头不换脸、不漂移，3-8 分钟交付可用成片。{% endblock %}
+
+{% block site_content %}
+{# ---------------------------------------------------------------- Hero #}
+<section class="hero">
+  <div class="container container-wide hero-inner">
+    <div>
+      <span class="hero-badge">
+        <svg class="icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        跨镜头一致性引擎 · 分镜级可控
+      </span>
+      <h1>把一段文字，变成一条能直接发的成片。</h1>
+      <p class="lede">
+        {{ product_name }} 先把你的素材拆成剧本与分镜，为每个角色和场景生成一张基准设定图，
+        再逐镜出片，最后做一致性评测。角色不换脸、场景不漂移，是长视频最关键的一道关，也是我们从第一行代码就在解决的问题。
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary btn-lg" href="{{ '/app' if principal else '/signup' }}">
+          {% if principal %}进入控制台{% else %}免费开始，送 500 点{% endif %}
+        </a>
+        <a class="btn btn-on-dark btn-lg" href="/#how">看它怎么工作</a>
+      </div>
+      <p class="hero-note">
+        {% if principal %}当前登录：{{ principal.user.email }}{% else %}无需信用卡 · 生成失败自动全额退还额度{% endif %}
+      </p>
+    </div>
+
+    <div class="mock" aria-hidden="true">
+      <div class="mock-bar">
+        <i></i><i></i><i></i>
+        <span>{{ product_name }} · 分镜工作室</span>
+      </div>
+      <div class="mock-body">
+        <div class="mock-tile"><em>sc01_sh01</em></div>
+        <div class="mock-tile"><em>sc01_sh02</em></div>
+        <div class="mock-tile"><em>sc02_sh01</em></div>
+      </div>
+      <div class="mock-foot">
+        <div class="progress-meta">
+          <span class="stage-name" style="color:#e6ecf8">逐镜生成</span>
+          <span class="progress-value" style="color:#94a3bd">62%</span>
+        </div>
+        <div class="progress"><div class="progress-fill tone-busy" style="width: 62%"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------ 功能矩阵 #}
+<section class="section" id="features">
+  <div class="container container-wide">
+    <div class="section-head">
+      <span class="eyebrow">功能矩阵</span>
+      <h2>不是「一键生成」，而是一条可控的流水线</h2>
+      <p class="lede">每个环节都留了人工介入的位置：提示词可改、单镜可重跑、成本可预估。</p>
+    </div>
+
+    <div class="grid grid-3">
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M4 5h16M4 12h10M4 19h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h3>自动拆解剧本</h3>
+        <p>一段素材 → 场景 / 镜头 / 景别 / 运镜 / 台词，输出结构化的分镜表，而不是黑盒一条视频。</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="2"/><path d="M5 20c1.4-3.4 4-5.1 7-5.1s5.6 1.7 7 5.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h3>跨镜头一致性</h3>
+        <p>先为角色与场景生成基准设定图，之后每个分镜都以它为参考，并在提示词里嵌入固定外观描述。</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M12 3.5 5 6.6v5.6c0 4 2.9 7 7 8.3 4.1-1.3 7-4.3 7-8.3V6.6L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9.2 12.1 11.3 14l3.6-3.9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>质量评测闭环</h3>
+        <p>色调稳定性、跨镜头相似度、基准图覆盖率等指标全部量化，低于阈值直接判失败并退还额度。</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M5 19V9m4.7 10V5M14.3 19v-7M19 19v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h3>成本透明</h3>
+        <p>生成前给出点数预估，生成后逐镜列出真实供应商成本与消耗点数，账本可对账、可追责。</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="m10 9.5 5 2.5-5 2.5v-5Z" fill="currentColor"/></svg>
+        </div>
+        <h3>分镜工作室</h3>
+        <p>九宫格看关键帧，逐镜改提示词、单镜重跑。只重跑你勾选的那几个镜头，费用只按重跑量计算。</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>REST API 与 BYOK</h3>
+        <p>专业版起开放 API Key，可把生成流程接进自己的系统；也能自带模型密钥，直接用自己的供应商额度。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------ 三步流程 #}
+<section class="section" id="how" style="background: var(--surface)">
+  <div class="container container-wide">
+    <div class="section-head">
+      <span class="eyebrow">三步流程</span>
+      <h2>从素材到成片，只有三步</h2>
+      <p class="lede">平均 3-8 分钟交付。中途可随时取消，未消耗的额度自动退还。</p>
+    </div>
+
+    <div class="steps">
+      <article class="step-card">
+        <span class="step-num" aria-hidden="true"></span>
+        <h3>贴上素材</h3>
+        <p>一段小说片段、一个产品卖点、一句口播稿都可以。系统会先拆出场景与镜头，并标注景别与运镜。</p>
+      </article>
+      <article class="step-card">
+        <span class="step-num" aria-hidden="true"></span>
+        <h3>选定风格与画幅</h3>
+        <p>电影感、日式动画、赛博朋克、水墨、写实记录五种风格预设；竖屏 9:16、横屏 16:9、方屏 1:1 任选。</p>
+      </article>
+      <article class="step-card">
+        <span class="step-num" aria-hidden="true"></span>
+        <h3>生成、审片、微调</h3>
+        <p>逐镜进度可见，关键帧与评测指标一并给出。不满意的镜头改提示词后单独重跑，不必整条重来。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------ 风格展示 #}
+<section class="section" id="styles">
+  <div class="container container-wide">
+    <div class="section-head">
+      <span class="eyebrow">风格预设</span>
+      <h2>五种成片气质，一套一致的执行标准</h2>
+      <p class="lede">风格不只是滤镜：它会改变光照、色调与画质关键词，并全程贯穿到每个分镜。</p>
+    </div>
+
+    <div class="style-grid">
+      {% for style in styles %}
+        {% set gradients = {
+          'cinematic': 'linear-gradient(140deg, #12161f 0%, #2e3a52 55%, #7889b0 100%)',
+          'anime': 'linear-gradient(140deg, #f8f6f0 0%, #ffd6aa 55%, #8cbEEB 100%)',
+          'cyberpunk': 'linear-gradient(140deg, #0a0818 0%, #221446 50%, #ff2a82 100%)',
+          'ink': 'linear-gradient(140deg, #f6f4ee 0%, #c6c4bc 55%, #1a1c1e 100%)',
+          'realistic': 'linear-gradient(140deg, #1e1e1e 0%, #605f5a 55%, #eeecE6 100%)'
+        } %}
+        <article class="style-card">
+          <div class="style-preview" style="background: {{ gradients.get(style.key, gradients['cinematic']) }}"></div>
+          <div class="style-body">
+            <p class="style-name">{{ style.name }}</p>
+            <p class="style-desc">{{ style.desc }}</p>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------ 定价预览 #}
+<section class="section" id="pricing" style="background: var(--surface)">
+  <div class="container container-wide">
+    <div class="section-head">
+      <span class="eyebrow">定价</span>
+      <h2>按点数计费，用多少付多少</h2>
+      <p class="lede">月度额度不结转，点数包不过期。生成失败全额退还，绝不收「失败的钱」。</p>
+    </div>
+
+    <div class="plan-grid">
+      {% for plan in paid_plans %}
+        <article class="plan{% if plan.tier.value == 'pro' %} plan-featured{% endif %}">
+          {% if plan.tier.value == 'pro' %}<span class="plan-flag">最受欢迎</span>{% endif %}
+          <p class="plan-name">{{ plan.name }}</p>
+          <p class="plan-tagline">{{ plan.tagline }}</p>
+          <p class="plan-price">
+            <strong>{{ plan.price_cny|money }}</strong><span>/ 月</span>
+          </p>
+          <p class="plan-credits">含 {{ plan.monthly_credits|credits }} 点 · 单条成片最多 {{ plan.max_shots_per_project }} 个镜头</p>
+
+          <ul class="plan-list">
+            {% for item in plan.highlights %}
+              <li>
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>{{ item }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+
+          <div class="plan-cta">
+            <a class="btn {% if plan.tier.value == 'pro' %}btn-primary{% else %}btn-ghost{% endif %} btn-block"
+               href="{{ '/app/billing' if principal else '/signup' }}">
+              {% if principal %}升级到{{ plan.name }}{% else %}选择{{ plan.name }}{% endif %}
+            </a>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+
+    <p class="center mt-3">
+      <a href="/pricing">查看完整对比表与免费额度说明 →</a>
+    </p>
+  </div>
+</section>
+
+{# ------------------------------------------------------------------ FAQ #}
+<section class="section">
+  <div class="container container-narrow">
+    <div class="section-head center">
+      <span class="eyebrow">常见问题</span>
+      <h2>你可能想知道</h2>
+    </div>
+
+    <div class="faq">
+      {% for item in faqs %}
+        <details class="faq-item"{% if loop.first %} open{% endif %}>
+          <summary>{{ item.q }}</summary>
+          <div class="faq-body">{{ item.a }}</div>
+        </details>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------------ CTA #}
+<section class="section-tight">
+  <div class="container container-wide">
+    <div class="cta-band">
+      <h2>先跑通一条完整成片，再决定要不要付费</h2>
+      <p class="lede">注册即得 500 点，够生成一条 6 镜的完整成片。免费版带水印，付费后自动去除。</p>
+      <div class="btn-row" style="justify-content: center">
+        <a class="btn btn-primary btn-lg" href="{{ '/app/projects/new' if principal else '/signup' }}">
+          {% if principal %}新建成片{% else %}免费注册{% endif %}
+        </a>
+        <a class="btn btn-on-dark btn-lg" href="mailto:{{ support_email }}">联系我们</a>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,263 @@
+# ============================================================================
+# ReelAgent 生产形态编排（单机部署）
+#
+# 用法：
+#   1) cp .env.production.example .env   →  改掉所有 CHANGE_ME
+#   2) docker compose up -d --build
+#
+# 关键约定（改 compose 前请先读）：
+#   * 敏感值**一律**来自 `.env`，本文件不出现任何明文口令。
+#     `docker compose` 会自动读取同目录的 `.env` 做变量插值，
+#     插值处统一用 `${VAR:?提示}`：变量缺失时立刻报错退出，
+#     而不是带着空口令把数据库起起来。
+#   * 数据库 / Redis 的连接串由 POSTGRES_* / REDIS_PASSWORD **推导**，
+#     不要求你在 .env 里再抄一遍带密码的 URL —— 一处修改，处处一致。
+#     （compose 的 environment 优先级高于 env_file，所以会覆盖 .env 里的
+#      REEL_DATABASE__URL；脱离 compose 裸跑时仍以 .env 里的 URL 为准。）
+#   * api / worker **等 migrate 跑完**才启动（service_completed_successfully）。
+#     worker 的停止宽限期必须**大于** REEL_WORKER__SHUTDOWN_GRACE_SECONDS，
+#     否则正在生成的成片会在优雅停机过程中被 SIGKILL 掐断。
+# ============================================================================
+name: reelagent
+
+# ---- 复用片段 ------------------------------------------------------------- #
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"      # 单文件上限，避免长期运行把宿主磁盘写满
+    max-file: "5"
+
+x-reel-env: &reel-env
+  # 只放"环境变量"，供各服务 environment 用 `<<: *reel-env` 合并。
+  # 注意：env_file 是 service 级字段，不能塞进这个锚点里（会变成非法环境变量）。
+  REEL_OBSERVABILITY__LOG_FORMAT: "json"
+  # 产物与本地存储目录（与下面的卷挂载点保持一致，必须成对修改）
+  REEL_WORKSPACE_DIR: "/app/workspace"
+  REEL_STORAGE__LOCAL_DIR: "/app/workspace/storage"
+
+# --------------------------------------------------------------------------- #
+services:
+  # ------------------------------------------------------------------ #
+  # PostgreSQL：唯一的事实来源。worker 的任务队列（租约）也在这张库里，
+  # 所以它挂了不是"只影响读"，而是全站停摆 —— 因此探针与重启策略都最严格。
+  # ------------------------------------------------------------------ #
+  postgres:
+    image: postgres:16-alpine
+    container_name: reelagent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?请在 .env 中设置 POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?请在 .env 中设置 POSTGRES_DB}
+      # 初始化时就用 UTC + 大小写敏感的排序规则，避免线上与本地行为不一致
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -U/-d 与上面保持同一变量来源，避免"健康但库名不对"的假绿
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # 不对外暴露端口：只有同网络的 api/worker 需要访问。
+    # 需要本地 psql 连上去排查时，临时加 `- 127.0.0.1:5432:5432` 即可。
+    expose:
+      - "5432"
+    logging: *default-logging
+
+  # ------------------------------------------------------------------ #
+  # Redis：**可选**依赖。当前只服务限流与缓存；未启用时限流退化为
+  # 进程内实现，服务仍可正常跑（见 RedisSettings 的注释）。
+  # ------------------------------------------------------------------ #
+  redis:
+    image: redis:7-alpine
+    container_name: reelagent-redis
+    restart: unless-stopped
+    # requirepass 从 .env 注入；appendonly 打开，重启不丢限流计数
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
+    expose:
+      - "6379"
+    logging: *default-logging
+
+  # ------------------------------------------------------------------ #
+  # migrate：一次性任务。等库起来 → 跑结构变更 → 退出。
+  # api / worker 通过 service_completed_successfully 串在它后面，
+  # 保证"新代码遇到新表结构"，杜绝滚动发布期间的列缺失报错。
+  # ------------------------------------------------------------------ #
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${REEL_IMAGE:-reelagent}:${REEL_IMAGE_TAG:-local}
+    container_name: reelagent-migrate
+    env_file:
+      - .env
+    environment:
+      <<: *reel-env
+      REEL_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+    # 先等端口可连（wait_for_db 会重试），再执行迁移。
+    # 仓库当前尚未包含 alembic.ini / migrations 目录，因此做了两条降级路径：
+    #   非生产环境 → 自动建表（等价于 create_all），让首次部署能跑通；
+    #   生产环境   → 明确报错要求你先补上迁移脚本，绝不静默改线上表结构。
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        python scripts/wait_for_db.py --timeout 120
+        if [ -f alembic.ini ]; then
+          echo "[migrate] 执行 alembic upgrade head"
+          alembic upgrade head
+        elif [ "$${REEL_ENV:-dev}" = "prod" ]; then
+          echo "[migrate] 未找到 alembic.ini，生产环境拒绝自动建表。请先执行 alembic init 并提交迁移脚本。" >&2
+          exit 1
+        else
+          echo "[migrate] 未找到 alembic.ini，非生产环境：自动建表（仅首次部署需要）"
+          python -c "import asyncio; from reelagent_cloud.db.session import create_all; asyncio.run(create_all())"
+        fi
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"          # 一次性任务，失败就该让整个 up 停下来暴露问题
+    logging: *default-logging
+
+  # ------------------------------------------------------------------ #
+  # api：HTTP 服务（reelagent-server）
+  # ------------------------------------------------------------------ #
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${REEL_IMAGE:-reelagent}:${REEL_IMAGE_TAG:-local}
+    container_name: reelagent-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      <<: *reel-env
+      REEL_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      REEL_REDIS__URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      REEL_REDIS__ENABLED: "true"
+    ports:
+      # 默认只绑本机，前面必须挂反向代理（Caddy/Nginx）负责 TLS 与域名。
+      # 想直接对外暴露再改成 "0.0.0.0:${REEL_HTTP_PORT:-8000}:8000"。
+      - "${REEL_BIND_ADDR:-127.0.0.1}:${REEL_HTTP_PORT:-8000}:8000"
+    volumes:
+      # 产物与本地存储：api（下载/上传）与 worker（写产物）必须共享同一卷
+      - artifacts:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # 与 Dockerfile 中的 /livez 探针一致，这里显式再声明一次，便于按环境调参
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    # 大于 uvicorn 收尾时间：给在途请求机会写完响应
+    stop_grace_period: 30s
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          # 可通过 .env 覆盖 —— 写死会在小规格机器上直接启动失败：
+          # Docker 要求 cpus 不超过宿主核数，超出时报
+          # "range of CPUs is from 0.01 to N, as there are only N CPUs available"。
+          cpus: "${API_CPUS:-2.0}"
+          memory: "${API_MEMORY:-2g}"
+        reservations:
+          memory: 512m
+
+  # ------------------------------------------------------------------ #
+  # worker：任务执行进程（reelagent-worker）。与 api 同镜像、不同命令。
+  # ------------------------------------------------------------------ #
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${REEL_IMAGE:-reelagent}:${REEL_IMAGE_TAG:-local}
+    container_name: reelagent-worker
+    restart: unless-stopped
+    command: ["reelagent-worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *reel-env
+      REEL_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      REEL_REDIS__URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      REEL_REDIS__ENABLED: "true"
+    volumes:
+      - artifacts:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # worker 不监听端口，没法用 HTTP 探针。
+    # 用 scripts/worker_healthcheck.py 扫 /proc 确认 worker 进程真的还在
+    # （镜像里没有 curl/pgrep，Python 是唯一必定存在的工具）。
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/worker_healthcheck.py"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # **必须大于** REEL_WORKER__SHUTDOWN_GRACE_SECONDS（默认 60s）：
+    # worker 收到 SIGTERM 后会停止领新任务、把在跑的做完（最长 60s），
+    # 这里的宽限期留 120s 才不至于在收尾阶段被 SIGKILL。
+    stop_grace_period: 120s
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          # 同样可通过 .env 覆盖。默认 4 核 4G 面向常规生产机；
+          # 2 核 4G 及以下的小机器必须下调，否则 compose 直接拒绝创建容器。
+          cpus: "${WORKER_CPUS:-4.0}"
+          # ffmpeg 合成是内存大户，按成片分辨率留足
+          memory: "${WORKER_MEMORY:-4g}"
+        reservations:
+          memory: 512m
+      # 需要横向扩容时：docker compose up -d --scale worker=3
+      # 注意：worker 通过数据库租约抢占任务，多副本天然安全，无需额外协调。
+
+# --------------------------------------------------------------------------- #
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  # 产物卷：本地存储后端的文件 + 引擎临时工作区。
+  # 注意：这是**命名卷**（由 Docker 管理并继承镜像内 appuser 的属主）。
+  # 若改成宿主机目录绑定挂载（./data:/app/workspace），需要先
+  # `mkdir -p data && sudo chown -R 10001:10001 data`，否则 appuser 无权写入，
+  # /readyz 的存储探测会持续失败。
+  artifacts:
+    driver: local

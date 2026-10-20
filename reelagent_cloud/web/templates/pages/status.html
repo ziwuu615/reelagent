@@ -1,0 +1,159 @@
+{% extends 'base.html' %}
+{% set layout = 'site' %}
+{% set topnav_active = 'status' %}
+{% block title %}系统状态 · {{ product_name }}{% endblock %}
+{% block description %}{{ product_name }} 实时状态：数据库、对象存储、模型供应商与计费依赖的健康检查，以及任务队列深度。{% endblock %}
+
+{% block site_content %}
+<section class="section-tight">
+  <div class="container container-wide">
+    <div class="page-head">
+      <div>
+        <span class="eyebrow">状态</span>
+        <h1>系统状态</h1>
+        <p class="lede">本页展示当前部署各依赖的健康检查结果与任务队列深度，数据实时取自服务端，不做缓存。</p>
+      </div>
+      <div class="btn-row">
+        <a class="btn btn-ghost btn-sm" href="/status">刷新</a>
+        <a class="btn btn-ghost btn-sm" href="{{ settings.docs_url }}">API 文档</a>
+      </div>
+    </div>
+
+    {# 总体状态横幅 #}
+    <div class="status-banner {% if overall == 'ok' %}status-ok{% else %}status-degraded{% endif %}" role="status">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div class="grow">
+        <h2>{% if overall == 'ok' %}所有关键依赖运行正常{% else %}部分依赖异常，服务可能降级{% endif %}</h2>
+        <p class="muted small">
+          {% if overall == 'ok' %}
+            关键的数据库与对象存储可用，生成流程不受影响。
+          {% else %}
+            至少一项关键依赖（数据库或对象存储）健康检查未通过。生成任务可能排队或失败，失败任务的额度会自动退还。
+          {% endif %}
+        </p>
+      </div>
+      <span class="badge badge-{{ 'ok' if overall == 'ok' else 'busy' }}"><i class="dot"></i>{{ '正常' if overall == 'ok' else '降级' }}</span>
+    </div>
+
+    <div class="grid grid-2-1 mt-4">
+      {# 依赖健康检查 #}
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">依赖健康检查</h3>
+            <p class="card-sub">标记为「关键」的依赖不可用时，将直接影响生成与文件访问。</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="dep-list">
+            {% set dep_names = {
+              'database': '数据库',
+              'storage': '对象存储',
+              'providers': '模型供应商',
+              'billing': '支付服务'
+            } %}
+            {% for key, check in checks.items() %}
+              <div class="dep">
+                <div class="grow">
+                  <p class="dep-name">
+                    {{ dep_names.get(key, key) }}
+                    {% if check.get('critical') %}
+                      <span class="tag" style="margin-left:6px">关键</span>
+                    {% else %}
+                      <span class="tag" style="margin-left:6px">非关键</span>
+                    {% endif %}
+                  </p>
+                  <p class="dep-meta">
+                    {% if key == 'database' and check.get('backend') %}
+                      引擎：{{ check.get('backend') }}
+                    {% elif key == 'storage' and check.get('backend') %}
+                      后端：{{ check.get('backend') }}
+                    {% elif key == 'providers' %}
+                      视频：{{ check.get('video') }} · 图像：{{ check.get('image') }} · 语言模型：{{ check.get('llm') }}
+                    {% elif key == 'billing' %}
+                      {{ '在线支付已开启' if check.get('enabled') else '未开启在线支付，可邮件联系开通' }}
+                    {% endif %}
+                    {% if check.get('error') %}
+                      · 错误类型：{{ check.get('error') }}
+                    {% endif %}
+                  </p>
+                </div>
+                <span class="badge badge-{{ 'ok' if check.get('ok') else ('bad' if check.get('critical') else 'busy') }}">
+                  <i class="dot"></i>{{ '正常' if check.get('ok') else '异常' }}
+                </span>
+              </div>
+            {% endfor %}
+          </div>
+
+          <p class="muted small mt-3">
+            「关键」依赖探测失败会触发告警；「非关键」依赖未配置时服务仍可启动，只是无法生成或无法收款。
+          </p>
+        </div>
+      </section>
+
+      {# 队列深度 #}
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">任务队列</h3>
+            <p class="card-sub">全平台任务按状态汇总</p>
+          </div>
+        </div>
+        <div class="card-body">
+          {% set status_names = {
+            'pending': '排队中',
+            'running': '执行中',
+            'succeeded': '已成功',
+            'failed': '可重试失败',
+            'dead': '已终止',
+            'cancelled': '已取消'
+          } %}
+          <div class="depth-grid">
+            {% for key, count in depths.items() %}
+              <div class="depth">
+                <p class="depth-value">{{ count }}</p>
+                <p class="depth-label">{{ status_names.get(key, key) }}</p>
+              </div>
+            {% endfor %}
+          </div>
+
+          {% set active = (depths.get('pending', 0) or 0) + (depths.get('running', 0) or 0) %}
+          <div class="alert {% if active > 40 %}alert-warn{% else %}alert-info{% endif %} alert-inline">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>
+              当前在途任务 {{ active }} 个。
+              {% if active > 40 %}队列偏长，生成等待时间可能延长。{% else %}队列通畅，生成等待时间在正常范围内。{% endif %}
+            </span>
+          </div>
+
+          <p class="muted small mt-3">
+            任务由数据库驱动的队列消费，worker 崩溃后租约自动过期，任务会被重新领取，不需要人工补单。
+          </p>
+        </div>
+      </section>
+    </div>
+
+    {# 生成流程阶段说明 #}
+    <section class="card mt-4">
+      <div class="card-head">
+        <div>
+          <h3 class="card-title">生成流程</h3>
+          <p class="card-sub">一条成片依次经过这些阶段，控制台会实时显示所处阶段</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <ol class="stages">
+          {% for name in ['排队中', '拆解剧本', '生成角色与场景', '逐镜生成', '质量评测', '合成成片', '完成'] %}
+            <li class="stage is-done"><i class="stage-dot"></i><span>{{ name }}</span></li>
+          {% endfor %}
+        </ol>
+        <p class="muted small mt-3">
+          若某个镜头生成失败，系统会自动重试；达到重试上限仍未成功则整条任务判定失败，
+          本次预扣的点数全额退还，并在用量页留下可对账的流水。
+          历史可用性事件会通过邮件通知付费用户，也可以直接联系 {{ support_email }} 查询。
+        </p>
+      </div>
+    </section>
+  </div>
+</section>
+{% endblock %}

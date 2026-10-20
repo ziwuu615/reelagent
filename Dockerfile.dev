@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+# ============================================================================
+# ReelAgent 开发镜像（可选）
+#
+# 用途：不装本地 Python 也能开发。源码通过 bind mount 挂进来，
+#      --reload 打开后改代码即时生效（见 docker-compose.dev.yml 的注释）。
+#
+# 与生产 Dockerfile 的差异（刻意为之）：
+#   - 单阶段构建，保留 gcc 等编译工具链，方便临时加包调试；
+#   - 以 root 运行（开发便利优先，避免挂载目录写权限问题）；
+#   - 同时装 dev 依赖（pytest / ruff / mypy / respx）；
+#   - 不设 HEALTHCHECK（开发时会频繁重启，探针只会制造噪音）。
+#
+# 注意：**不要**用这个镜像上生产。
+# ============================================================================
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# ffmpeg 保证开发环境也能真实合成 MP4（不希望降级成 GIF+WAV 时尤其重要）
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ffmpeg build-essential libffi-dev curl ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 先拷依赖声明，利用层缓存；源码靠 bind mount 覆盖，改代码无需重建
+COPY pyproject.toml README.md ./
+COPY reelagent ./reelagent
+COPY reelagent_cloud ./reelagent_cloud
+COPY scripts ./scripts
+
+# 可编辑安装 + 开发依赖（含 dev extra 的 ruff/mypy/pytest）
+RUN pip install --upgrade pip setuptools wheel \
+ && pip install -e ".[dev,s3,sentry]"
+
+EXPOSE 8000
+
+# 默认跑热重载服务；worker 用 `docker compose -f docker-compose.dev.yml run --rm ...` 起
+CMD ["reelagent-server", "--host", "0.0.0.0", "--port", "8000", "--reload"]
