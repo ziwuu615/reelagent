@@ -163,6 +163,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
+    # 模板层是进程级单例，必须显式告诉它「这次用哪份配置」。
+    # 不这么做的话，create_app(settings) 的参数对模板无效 ——
+    # 页面会一直用进程启动时的全局配置渲染（表现为改了 product_name /
+    # icp_beian 却不生效，且被 lru_cache 永久冻结）。
+    from .templating import set_template_settings
+
+    set_template_settings(settings)
+
     register_error_handlers(app)
     install_middleware(app, settings)
 

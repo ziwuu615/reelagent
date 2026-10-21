@@ -87,6 +87,10 @@ def _duration(path: Path) -> float:
         [FFMPEG, "-hide_banner", "-i", str(path)],
         capture_output=True,
         text=True,
+        # 与 composer 侧保持一致：不指定编码时 Windows 会按 locale(GBK) 解码，
+        # ffmpeg 的 stderr 含非 GBK 字节会让 reader 线程抛错、stderr 变成 None。
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
     )
     m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", out.stderr)

@@ -1,0 +1,75 @@
+# ============================================================================
+# 生产覆盖层：TLS 终结 + 只暴露 80/443
+#
+# 用法（叠加在基础文件之上，不是替换）：
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 与 docker-compose.yml 的差异只有两处：
+#   1. api 不再绑定宿主端口 —— 唯一入口是 Caddy 的 80/443
+#   2. 新增 caddy 服务，负责证书签发与反向代理
+#
+# 为什么不把这些直接写进 docker-compose.yml：
+#   本地开发和纯内网部署不需要 TLS 终结者，多一个容器就多一份资源与排障面。
+#   叠加文件让「跑不跑 Caddy」变成一个显式选择。
+# ============================================================================
+
+services:
+  api:
+    # `!reset` 是 Compose 的**覆盖**语义：清空基础文件里的 ports 数组，
+    # 而不是往里追加。
+    #
+    # 如果写成 `ports: []`，Compose 会把空数组当作「无操作」，
+    # 基础文件里的 `0.0.0.0:8000` 依然生效 —— 于是 HTTPS 挂上了，
+    # 但 8000 还裸奔在公网上，等于绕过了 TLS 开了一个后门。
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: reelagent-caddy
+    restart: unless-stopped
+    depends_on:
+      api:
+        # 等 api 真正健康（/livez 通过）再开始接流量，
+        # 避免首个请求打到还没初始化完的应用上。
+        condition: service_healthy
+    environment:
+      REEL_DOMAIN: ${REEL_DOMAIN:?请在 .env 中设置 REEL_DOMAIN，例如 reelagent.online}
+      REEL_ACME_EMAIL: ${REEL_ACME_EMAIL:?请在 .env 中设置 REEL_ACME_EMAIL，Let's Encrypt 需要联系人邮箱}
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3 走 UDP。不开放也不影响使用（会自动回落 HTTP/2），
+      # 但开了能让移动端首屏更快。
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 证书与 ACME 账户必须持久化。
+      #
+      # 这不是可选项：Let's Encrypt 对同一组域名有「每周 5 次重复签发」的限额。
+      # 如果证书目录随容器销毁，重启 5 次之后就会因为超限而拿不到证书，
+      # 整站直接无法提供 HTTPS，而且要等一周才恢复。
+      - caddydata:/data
+      - caddyconfig:/config
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          # Caddy 很轻（常驻约 20–40 MB），给个上限防止异常时占满内存 ——
+          # 这台机器总内存只有 1.7 GiB，任何服务失控都会拖垮 worker。
+          cpus: "${CADDY_CPUS:-0.5}"
+          memory: "${CADDY_MEMORY:-128m}"
+
+volumes:
+  caddydata:
+  caddyconfig:

@@ -360,6 +360,9 @@ class Director(Agent):
             shot.image_prompt = str(data.get("image_prompt") or "").strip() or self._fallback_prompt(
                 shot, clue_lines, style_repr
             )
+            # LLM 为了行文通顺会改写 / 倒装 / 省略 appearance，导致保真度指标掉。
+            # 这里做确定性补齐，不把「约束是否被传下去」交给模型赌。
+            shot.image_prompt = self._enforce_clue_fidelity(shot, bound_clues)
             shot.video_prompt = str(data.get("video_prompt") or "").strip() or f"{shot.camera}，{shot.action}"
         except Exception as exc:
             self.rt.tracer.record(
@@ -378,6 +381,40 @@ class Director(Agent):
             parts.append("；".join(clue_lines))
         parts.append(style_repr)
         return "，".join(p for p in parts if p)
+
+    def _enforce_clue_fidelity(self, shot: Shot, bound_clues: list[Clue]) -> str:
+        """确定性后置注入：把 LLM 改写掉或漏掉的线索外观原样补回 prompt。
+
+        为什么必须做：真实模型下 qwen-plus 会为了行文通顺而改写 appearance
+        （插字、倒装、省略）。实测项目 proj_e2092083e7 的 3 个镜头里有 2 个
+        因此 `prompt_clue_fidelity` 掉到 0.3333，CI 门禁直接不通过：
+          LLM 写 "穿藏青粗布立领衫的老人——瘦高身形"
+          原文 "瘦高身形，藏青粗布立领衫"（倒装后 12 字前缀不再连续出现）
+
+        而这个指标度量的恰恰是「约束有没有被传下去」，属于工程可控的部分，
+        不该交给模型的听话程度去赌 —— 重试只会变成概率游戏且要额外付费。
+
+        判定口径与 `reelagent.eval.consistency.prompt_clue_fidelity` 严格一致
+        （appearance 前 12 字是否出现在 prompt 中），因此补齐后必然为 1.0。
+        """
+        prompt = shot.image_prompt or ""
+        missing: list[str] = []
+        for clue in bound_clues:
+            appearance = (clue.appearance or "").strip()
+            if not appearance or appearance[:12] in prompt:
+                continue
+            missing.append(f"{clue.name}：{appearance}")
+        if not missing:
+            return prompt
+
+        self.rt.tracer.record(
+            "director.prompt_repaired",
+            status="ok",
+            shot_id=shot.id,
+            repaired=len(missing),
+        )
+        suffix = "；".join(missing)
+        return f"{prompt}；{suffix}" if prompt else suffix
 
     # ------------------------------------------------------------------ #
     def _log(self, msg: str) -> None:

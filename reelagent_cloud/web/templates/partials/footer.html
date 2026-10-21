@@ -42,4 +42,22 @@
       {% if billing_enabled %}支付由 Stripe 处理，本站不存储卡号。{% else %}当前部署未开启在线支付。{% endif %}
     </p>
   </div>
+
+  {# ICP 备案号：国内服务器 + 备案域名必须展示，且必须链接到工信部网站。
+     不挂会被管局责令整改。ccs.icp_beian 为空时（本地开发、海外部署）整块不渲染。 #}
+  {% if settings.icp_beian %}
+    <div class="container container-wide footer-bottom footer-beian">
+      <p class="muted">
+        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer nofollow">
+          {{ settings.icp_beian }}
+        </a>
+        {% if settings.gongan_beian %}
+          <span aria-hidden="true">·</span>
+          <a href="https://beian.mps.gov.cn/" target="_blank" rel="noopener noreferrer nofollow">
+            {{ settings.gongan_beian }}
+          </a>
+        {% endif %}
+      </p>
+    </div>
+  {% endif %}
 </footer>

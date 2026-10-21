@@ -1,0 +1,55 @@
+{
+	# Let's Encrypt 联系邮箱。证书到期或出问题时 ACME 会发信到这里。
+	email {$REEL_ACME_EMAIL}
+}
+
+# 主域名与 www 共用一份配置，各自签一张证书（Caddy 自动处理 HTTP-01）。
+#
+# 域名来自环境变量 REEL_DOMAIN，由 docker-compose.prod.yml 传入 —— 换域名时
+# 只改 .env，不用碰这个文件。
+{$REEL_DOMAIN}, www.{$REEL_DOMAIN} {
+	encode zstd gzip
+
+	# --- 隐藏内部指标 ---
+	# /metrics 是给 Prometheus 抓的，暴露在公网上等于把请求量、错误率、
+	# 任务队列积压等运行状况全部公开。
+	# 监控应当从 Docker 内网直接抓 api:8000/metrics，不经过 Caddy。
+	@metrics path /metrics
+	respond @metrics 404
+
+	# --- 反向代理 ---
+	#
+	# 刻意**不配置主动健康检查**（health_uri）。
+	# 原因：Caddy 的健康探测请求带的是上游地址作为 Host（`api:8000`），
+	# 而应用的 TrustedHostMiddleware 只放行显式白名单里的主机名。
+	# 探测因此会拿到 400，Caddy 判定上游不健康 —— 但只有一个上游，
+	# 结果就是**所有请求都 502**，而应用本身完全正常。
+	#
+	# 启动顺序已由 docker-compose.prod.yml 里的
+	# `depends_on: api: condition: service_healthy` 保证；
+	# 运行期 api 若真的挂了，Caddy 会自然返回 502，不需要主动探测。
+	#
+	# 也不手工设置 X-Forwarded-For：Caddy 默认就会带上
+	# X-Forwarded-For / X-Forwarded-Proto / X-Forwarded-Host，
+	# 而应用侧的 client_ip() 已经按「第一跳是否内网」判断是否采信。
+	reverse_proxy api:8000
+
+	# --- 访问日志 ---
+	log {
+		output stdout
+		format json
+	}
+
+	# --- 安全响应头 ---
+	header {
+		# HSTS 先给 1 天，而不是常见的 1 年。
+		#
+		# 原因：HSTS 一旦下发，浏览器在有效期内**强制**走 HTTPS 且不允许
+		# 用户点「继续访问」。首次上线期间如果证书或端口出问题，
+		# 1 年的有效期会让排查非常难受（只能清浏览器缓存）。
+		# 稳定运行一段时间后再改成 max-age=31536000。
+		Strict-Transport-Security "max-age=86400"
+		# 不暴露 Caddy 版本，减少指纹信息
+		-Server
+	}
+}

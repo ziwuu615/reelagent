@@ -196,6 +196,11 @@ def has_audio_stream(path: Path, ffmpeg: str) -> bool:
         [ffmpeg, "-hide_banner", "-i", str(path)],
         capture_output=True,
         text=True,
+        # 必须显式指定编码：Windows 中文环境下 `text=True` 会按 locale（GBK）
+        # 解码，ffmpeg 的 stderr 一旦出现非 GBK 字节（元数据里的非中文编码标题）
+        # 就在 reader 线程抛 UnicodeDecodeError，整个合成流程被误判为失败。
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
     )
     return "Audio:" in proc.stderr
@@ -212,6 +217,8 @@ def _probe_duration(ffmpeg: str, path: Path) -> float:
             [ffmpeg, "-hide_banner", "-i", str(path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
         )
     except Exception:
@@ -354,7 +361,20 @@ def compose_mp4(
     ]
     # cmd 是我们自己拼的参数列表（不经 shell），路径来自受控工作区，
     # 不存在命令注入面；S603 在此为误报。
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)  # noqa: S603
+    #
+    # encoding 必须显式给：见 has_audio_stream 里的说明。这里尤其致命 ——
+    # ffmpeg 一旦在 stderr 里输出非 GBK 字节（中文标题的容器元数据、AAC 解码告警），
+    # `text=True` 按 locale 解码就会抛 UnicodeDecodeError，被 compose() 的
+    # `except Exception` 捕获后当成「ffmpeg 合成失败」降级去拼 GIF，
+    # 而片段是真实 MP4，于是 GIF 分支再抛 RenderError，真正的失败原因被掩盖。
+    proc = subprocess.run(  # noqa: S603
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=900,
+    )
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg 合成失败：{proc.stderr.strip()[:500]}")
     return out_path
@@ -412,7 +432,15 @@ def compose(project: Project, settings, *, out_dir: Path | None = None) -> dict[
         )
 
     if not project.final_video and clips:
-        gif = concat_gifs(clips, out_dir / "final.gif")
+        try:
+            gif = concat_gifs(clips, out_dir / "final.gif")
+        except RenderError as exc:
+            # 降级失败时不要把上游原因盖掉。真实事故：ffmpeg 合成因编码问题失败，
+            # 降级去拼 GIF，而片段是 MP4，最终报的是「片段无法解码为图像」——
+            # 排查方向被完全带偏。这里把 ffmpeg 的失败原因一并带出来。
+            if result["warnings"]:
+                raise RenderError(f"{exc}；同时 ffmpeg 合成也已失败：{result['warnings'][-1]}") from exc
+            raise
         if gif:
             project.final_gif = settings.rel(gif)
             result["gif"] = project.final_gif

@@ -258,6 +258,11 @@ class Settings(BaseSettings):
     #: 必须是一个语法合法的邮箱——OpenAPI 会校验它
     support_email: str = "support@example.com"
     docs_url: str = "/docs"
+    #: ICP 备案号。国内服务器 + 备案域名必须展示在页面底部并链接到工信部，
+    #: 否则会被责令整改。留空则不渲染——本地开发与海外部署不需要它。
+    icp_beian: str = ""
+    #: 公安备案号（可选）。部分站点还会要求，同样带链接。
+    gongan_beian: str = ""
 
     # ---- 基础设施 ----
     database: DatabaseSettings = DatabaseSettings()

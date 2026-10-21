@@ -79,6 +79,8 @@ def _mean_volume(path: Path) -> float | None:
         [FFMPEG, "-hide_banner", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=180,
     )
     match = re.search(r"mean_volume:\s*(-?[\d.]+)", proc.stderr)
