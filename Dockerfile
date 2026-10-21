@@ -137,6 +137,22 @@ COPY --chown=appuser:appuser reelagent ./reelagent
 COPY --chown=appuser:appuser reelagent_cloud ./reelagent_cloud
 COPY --chown=appuser:appuser scripts ./scripts
 COPY --chown=appuser:appuser pyproject.toml README.md ./
+# alembic.ini 必须复制进来。
+#
+# 漏掉它的后果（真实踩过）：compose 的 migrate 步骤判断 `[ -f alembic.ini ]`，
+# 找不到就走「非生产环境自动建表」分支。这在 dev/staging 下能跑通，
+# 但切到 `REEL_ENV=prod` 时会走到这条：
+#
+#     elif [ "$REEL_ENV" = "prod" ]; then
+#       echo "未找到 alembic.ini，生产环境拒绝自动建表" >&2; exit 1
+#
+# 于是 migrate 容器退出码 1，api/worker 因 service_completed_successfully
+# 不满足而永远不启动 —— 表现为「切到生产环境后整站起不来」，
+# 而 dev 环境一切正常，极难联想到少复制了一个配置文件。
+#
+# migrations 目录不需要单独复制：它随 `COPY reelagent_cloud` 一起进来了，
+# 且 alembic.ini 里的 script_location 正好指向 reelagent_cloud/db/migrations。
+COPY --chown=appuser:appuser alembic.ini ./
 
 # 产物 / 本地存储目录，预先建好并授权（命名卷首次挂载会继承这里的属主）
 RUN mkdir -p /app/workspace/storage /app/workspace/engine \
