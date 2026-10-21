@@ -348,7 +348,12 @@ async def execute_generation(
     # 界面显示 ready 0/0、扣费 0、退还全部预扣 —— 看起来像「跑完了但什么都没生成」。
     failed_stage = first_failed_stage(engine_result)
     if failed_stage is not None:
-        stage_key = str(failed_stage.get("name") or "")
+        # 键名是 stage 而不是 name —— 由 StageOutcome.as_dict() 决定：
+        #     {"stage": self.name, "status": ..., "error": ...}
+        # 上一版写成 .get("name")，取到 None，错误信息渲染成「生成失败（）」，
+        # 阶段名是空的。当时的单元测试没抓到，因为测试里手写的是
+        # {"name": "plan"} —— 测的是想象出来的格式，不是引擎真实输出。
+        stage_key = str(failed_stage.get("stage") or "")
         raw_error = str(failed_stage.get("error") or "")
         message = humanize_provider_error(raw_error)
         # 这里用 error 而不是 warning：它是一次真实的失败，不是可忽略的异常。

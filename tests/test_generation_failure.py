@@ -41,41 +41,62 @@ ARREARAGE_RAW = (
 
 
 class TestFirstFailedStage:
+    def test_detects_real_stage_outcome(self) -> None:
+        """**用引擎真实的 StageOutcome.as_dict() 输出测试。**
+
+        真实事故：这条逻辑上一版写的是 ailed_stage.get("name")，
+        而引擎实际输出的键是 "stage" —— 于是错误信息渲染成
+        「生成失败（）」，阶段名是空的。
+
+        当时测试全绿，因为测试里手写的是 {"name": "plan"}：
+        测的是我想象出来的格式，不是引擎真实输出。
+        从那以后这类断言一律用 dataclass 本身构造，不再手写 dict。
+        """
+        from reelagent.pipeline.runner import StageOutcome
+
+        outcome = StageOutcome("plan", "failed", 12.3, error=ARREARAGE_RAW)
+        found = first_failed_stage({"stages": [outcome.as_dict()]})
+
+        assert found is not None
+        # 键名必须是 stage —— 这是 at_dict 的契约，改它就会再次出现空阶段名
+        assert found["stage"] == "plan"
+        assert "name" not in found, "as_dict 不应输出 name 键"
+
     def test_detects_failed_stage(self) -> None:
         result = {
             "stages": [
-                {"name": "plan", "status": "failed", "error": ARREARAGE_RAW},
+                {"stage": "plan", "status": "failed", "error": ARREARAGE_RAW},
             ]
         }
         found = first_failed_stage(result)
         assert found is not None
-        assert found["name"] == "plan"
+        assert found["stage"] == "plan"
 
     def test_detects_failure_after_successful_stages(self) -> None:
         """前面的阶段成功、后面的失败，也要能找出来。"""
         result = {
             "stages": [
-                {"name": "plan", "status": "done"},
-                {"name": "assets", "status": "done"},
-                {"name": "generate", "status": "failed", "error": "boom"},
+                {"stage": "plan", "status": "done"},
+                {"stage": "assets", "status": "done"},
+                {"stage": "generate", "status": "failed", "error": "boom"},
             ]
         }
         found = first_failed_stage(result)
         assert found is not None
-        assert found["name"] == "generate"
+        assert found["stage"] == "generate"
 
     def test_all_done_returns_none(self) -> None:
         result = {
             "stages": [
-                {"name": "plan", "status": "done"},
-                {"name": "render", "status": "done"},
+                {"stage": "plan", "status": "done"},
+                {"stage": "render", "status": "done"},
             ]
         }
         assert first_failed_stage(result) is None
 
     def test_skipped_stage_is_not_failure(self) -> None:
         """断点续跑时阶段可能是 skipped，那不是失败。"""
-        result = {"stages": [{"name": "plan", "status": "skipped"}]}
+        result = {"stages": [{"stage": "plan", "status": "skipped"}]}
         assert first_failed_stage(result) is None
 
     @pytest.mark.parametrize("empty", [None, {}, {"stages": None}, {"stages": []}])
@@ -84,9 +105,9 @@ class TestFirstFailedStage:
 
     def test_tolerates_non_dict_stage(self) -> None:
         """引擎若返回了非 dict 的条目（未来格式变化），不能炸。"""
-        result = {"stages": ["something", {"name": "plan", "status": "failed"}]}
+        result = {"stages": ["something", {"stage": "plan", "status": "failed"}]}
         found = first_failed_stage(result)
-        assert found is not None and found["name"] == "plan"
+        assert found is not None and found["stage"] == "plan"
 
 
 class TestHumanizeProviderError:
