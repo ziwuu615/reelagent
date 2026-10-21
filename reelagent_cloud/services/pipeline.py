@@ -43,7 +43,7 @@ from ..config import Settings
 from ..db.models import Artifact, Organization, Project
 from ..db.session import session_scope
 from ..domain.enums import ArtifactKind, JobStage, ProjectStatus
-from ..domain.errors import UnsupportedOperation
+from ..domain.errors import GenerationFailed, UnsupportedOperation
 from ..observability import Timer, get_logger, provider_cost_usd_total, shots_generated_total
 from ..security import decrypt_byok_map
 from . import jobs as jobs_svc
@@ -60,6 +60,77 @@ STAGE_TO_JOB_STAGE = {
     "evaluate": JobStage.EVALUATING,
     "render": JobStage.RENDERING,
 }
+
+#: 阶段的中文名。报错时给用户看「剧本拆解失败」而不是「plan 失败」。
+STAGE_LABELS = {
+    "plan": "剧本拆解",
+    "assets": "素材准备",
+    "generate": "镜头生成",
+    "evaluate": "质量评测",
+    "render": "成片合成",
+}
+
+#: 供应商错误关键字 -> 用户能看懂、能行动的一句话。
+#:
+#: 直接把原始 JSON 抛给用户毫无意义：他既不知道 "Arrearage" 是什么意思，
+#: 也不知道该去做什么。这里只做**保守**的匹配 —— 认不出就原样返回，
+#: 绝不猜测性改写（错误的信息比没有信息更糟）。
+_PROVIDER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("arrearage", "overdue-payment", "欠费", "insufficient balance", "1113"),
+        "AI 供应商账户余额不足或已欠费，请到供应商控制台充值后重试",
+    ),
+    (
+        ("quota", "1302", "exceeded your current quota"),
+        "AI 供应商账户配额已用尽，请检查套餐额度或稍后再试",
+    ),
+    (
+        ("invalid_api_key", "incorrect api key", "401", "unauthorized"),
+        "AI 供应商鉴权失败，请检查 API Key 是否正确或已失效",
+    ),
+    (
+        ("rate limit", "too many requests", "429"),
+        "AI 供应商限流，请稍后重试",
+    ),
+)
+
+
+def humanize_provider_error(raw: str) -> str:
+    """把供应商的原始错误翻译成一句用户能行动的话。
+
+    认不出来时返回原文（截断），不做猜测。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return "未知原因"
+    lowered = text.lower()
+    for needles, message in _PROVIDER_ERROR_HINTS:
+        if any(n.lower() in lowered for n in needles):
+            # 附上原文片段：用户报障时能直接粘给供应商技术支持。
+            # 240 字符而不是 180 —— 实测阿里云的错误体里，真正的错误码
+            # （如 "code":"Arrearage"）大约在 200 字符处，截太短会把它切掉，
+            # 而错误码正是技术支持最需要的信息。
+            return f"{message}（供应商原文：{text[:240]}）"
+    return text[:300]
+
+
+def first_failed_stage(engine_result: dict[str, Any] | None) -> dict[str, Any] | None:
+    """从引擎返回结果里找出第一个失败的阶段，没有则返回 None。
+
+    引擎的设计是：单个阶段失败时**不抛异常**，而是把 StageOutcome 标成
+    failed 并正常返回整个结果。这样调用方可以决定是继续还是中止。
+    云端必须显式检查这个字段，否则「阶段失败」会被当成「阶段什么都没做」，
+    最终表现为「项目已完成、但 0 个镜头」。
+
+    抽成独立函数是为了能单独测试 —— 否则验证这条逻辑要模拟整个引擎运行。
+    """
+    if not engine_result:
+        return None
+    for stage in engine_result.get("stages") or []:
+        if isinstance(stage, dict) and stage.get("status") == "failed":
+            return stage
+    return None
+
 
 #: 需要上传到对象存储的目录 -> Artifact 类型
 ARTIFACT_DIRS: list[tuple[str, ArtifactKind, str]] = [
@@ -235,7 +306,11 @@ async def execute_generation(
         if status in {"running", "done"}:
             asyncio.run_coroutine_threadsafe(_update_progress(job_id, job_stage, status == "done"), loop)
         elif status == "failed":
-            log.warning("engine_stage_failed", job_id=job_id, stage=stage)
+            # 这里只打个 debug：这个回调拿不到异常对象，写出来的日志没有排查价值
+            # （上一版就是只写了 stage 名，线上完全不知道失败原因）。
+            # 真正的失败信息由 engine_result["stages"] 带出来，
+            # 在下面「阶段三之二」统一记录并转成用户可读的错误。
+            log.debug("engine_stage_callback_failed", job_id=job_id, stage=stage)
 
     def cancel_check() -> bool:
         return bool(should_cancel and should_cancel())
@@ -258,6 +333,40 @@ async def execute_generation(
         except PipelineCancelled as exc:
             log.info("generation_cancelled", job_id=job_id, reason=str(exc))
             raise GenerationCancelled(str(exc)) from exc
+
+    # ---- 阶段三之二：引擎中途失败时，必须让整个任务失败 ----
+    #
+    # 引擎在阶段失败时**不会抛异常**，而是把结果标成 failed 并正常返回
+    # （见 runner._run_stage 的 except 分支：返回 StageOutcome(status="failed")）。
+    #
+    # 早期实现直接往下走，于是：
+    #   - 项目被无条件标记成 ready（0 镜头）
+    #   - job 被标记成 succeeded
+    #   - 用户看到「已完成」的空项目，完全没有任何错误提示
+    #
+    # 真实事故：百炼账户欠费，plan 阶段被 HTTP 400 / code=Arrearage 拒绝，
+    # 界面显示 ready 0/0、扣费 0、退还全部预扣 —— 看起来像「跑完了但什么都没生成」。
+    failed_stage = first_failed_stage(engine_result)
+    if failed_stage is not None:
+        stage_key = str(failed_stage.get("name") or "")
+        raw_error = str(failed_stage.get("error") or "")
+        message = humanize_provider_error(raw_error)
+        # 这里用 error 而不是 warning：它是一次真实的失败，不是可忽略的异常。
+        # 同时把原始错误完整记下来 —— 上一版日志只有 stage 名，
+        # 排查时完全不知道失败原因，只能靠猜。
+        log.error(
+            "generation_stage_failed",
+            job_id=job_id,
+            stage=stage_key,
+            stage_label=STAGE_LABELS.get(stage_key, stage_key),
+            error=raw_error[:800],
+        )
+        async with session_scope() as session:
+            row = await session.get(Project, project_id)
+            if row is not None:
+                row.status = ProjectStatus.FAILED
+                await session.flush()
+        raise GenerationFailed(f"生成失败（{STAGE_LABELS.get(stage_key, stage_key)}）：{message}")
 
     # ---- 阶段四：归集产物 ----
     artifacts = await _collect_artifacts(

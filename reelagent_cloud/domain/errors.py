@@ -182,6 +182,28 @@ class JobFailed(AppError):
     http_status = 500
 
 
+class GenerationFailed(JobFailed):
+    """生成流程失败，且**不适合自动重试**。
+
+    与 JobFailed 的唯一区别是 retryable：
+    worker 的 `_finish_failure` 用 `getattr(exc, "retryable", True)` 决定
+    队列是否重新投递，而 AppError 基类没有这个属性 —— 于是默认 True。
+
+    但生成失败的真实原因通常是**账户余额不足、API Key 失效、供应商服务
+    不可用**这类需要人介入的问题。自动重试只会：
+
+      1. 把注定失败的请求再打一遍，浪费配额与时间
+      2. 无意义地耗尽 job 的 attempts
+      3. 在界面上把「欠费」表现成「偶发失败，正在重试」
+
+    真实事故：百炼账户欠费（HTTP 400 / code=Arrearage），plan 阶段直接
+    被拒，但因为默认可重试，队列又投递了两次，每次都立刻失败。
+    """
+
+    code = "generation_failed"
+    retryable = False
+
+
 class JobCancelled(AppError):
     """任务已取消"""
 
