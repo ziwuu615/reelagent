@@ -86,8 +86,13 @@ def palette_stability(paths: list[Path]) -> float:
 
 def cross_shot_clue_similarity(
     shots: list[Shot], clues: dict[str, Clue], base_dir: Path
-) -> tuple[float, dict[str, Any]]:
-    """同一线索在不同镜头中的画面相似度。"""
+) -> tuple[float | None, dict[str, Any]]:
+    """同一线索在不同镜头中的画面相似度。
+
+    只统计 `kind == "character"` 的线索（道具与场景的稳定性由
+    `palette_stability` 与人工评审间接反映）。
+    没有任何角色跨 >=2 个镜头时返回 None —— 见函数末尾的说明。
+    """
     by_clue: dict[str, list[Path]] = {}
     for shot in shots:
         if not shot.keyframe_path:
@@ -117,7 +122,14 @@ def cross_shot_clue_similarity(
         all_vals.append(m)
         per_clue[clues[cid].name] = {"shots": len(paths), "similarity": round(m, 4)}
 
-    overall = round(float(np.mean(all_vals)), 4) if all_vals else 1.0
+    # 没有任何角色线索跨 >=2 个镜头时返回 None（N/A），而不是 1.0。
+    #
+    # 真实数据（proj_ee0f7be519，7 镜 live）：每个角色都只出现在一个镜头里，
+    # 于是 all_vals 为空、这里返回 1.0，CLI 把「同线索跨镜头相似度」印成 1.0000，
+    # 综合分被抬到 1.0000 —— 但那是「没有可度量的对象」，不是「一致性完美」。
+    # 这与本模块对 clue_reference_coverage 的处理自相矛盾（那里明确返回 None），
+    # 也是 README 反复强调的「无数据不等于满分」。同一套口径必须一致。
+    overall = round(float(np.mean(all_vals)), 4) if all_vals else None
     return overall, per_clue
 
 
