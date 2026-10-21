@@ -37,6 +37,7 @@ from .base import (
     TTSProvider,
     VideoProvider,
     estimate_image_cost,
+    estimate_tts_cost,
     estimate_video_cost,
 )
 
@@ -249,7 +250,12 @@ class DashScopeTTSProvider(TTSProvider):
             path=out_path,
             provider=self.name,
             model=self.model,
-            cost_usd=0.0,
+            # 必须按字符计费，不能写死 0.0。
+            # 真实事故（proj_e2092083e7）：3 次 TTS 调用共 40 字符全部记为 $0，
+            # 成本对账里 tts 一栏恒为 0 —— 单条短片看不出来，量大后就是
+            # 账本与真实支出对不上的系统性缺口。ark.py 的 TTS 早就用了
+            # estimate_tts_cost，这里与它对齐。
+            cost_usd=estimate_tts_cost(text),
             latency_ms=(time.perf_counter() - started) * 1000,
             meta={"voice": voice or self.voice, "chars": len(text)},
         )
