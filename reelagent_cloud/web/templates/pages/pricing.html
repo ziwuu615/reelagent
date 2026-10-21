@@ -2,7 +2,7 @@
 {% set layout = 'site' %}
 {% set topnav_active = 'pricing' %}
 {% block title %}定价 · {{ product_name }}{% endblock %}
-{% block description %}{{ product_name }} 定价：体验版免费，创作者版 ¥49/月，专业版 ¥199/月，工作室版 ¥699/月。按点数计费，生成失败全额退还。{% endblock %}
+{% block description %}{{ product_name }} 定价：体验版免费，创作者版 ¥{{ plan_map['starter'].price_cny }}/月，专业版 ¥{{ plan_map['pro'].price_cny }}/月，工作室版 ¥{{ plan_map['studio'].price_cny }}/月。按点数计费，生成失败全额退还。{% endblock %}
 
 {% block site_content %}
 <section class="section-tight">

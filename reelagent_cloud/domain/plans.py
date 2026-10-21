@@ -3,7 +3,28 @@
 单一事实来源：定价页、额度校验、Stripe Price 映射都读这里，
 避免「官网写一个价、后端校验另一个价」这类经典事故。
 
-额度单位说明：**100 额度 = 1 美元供应商成本 × 加价倍率**。
+## 点数与月费的关系（改价前必读）
+
+扣费侧（`services/credits.py::usd_to_credits`）：
+
+    credits = ceil(供应商成本USD × markup_multiplier × credits_per_usd)
+
+默认 3.0 × 100 = 300，即 **$1 供应商成本扣 300 点**。
+
+于是「3 倍毛利」等价于：300 点的售价 ≥ 3 × $1 × 7.2 元 = 21.6 元。
+两边同除，markup 被约掉，得到一个**与倍率无关**的下限：
+
+    元/点 ≥ CNY_PER_USD / credits_per_usd = 7.2 / 100 = 0.072
+
+本文件各套餐按 `monthly_credits × 0.072` 定价（216 / 1080 / 4320 元）。
+额度阶梯本身就是 ×1 / ×5 / ×20，价格阶梯与之同比，因此三档毛利率一致。
+
+⚠️ 历史坑：原定价 49 / 199 / 699 对应 0.0163 / 0.0133 / 0.0117 元/点，
+只能收回供应商成本的 23%~49%，**而且套餐越大亏得越多**（越贵反而越便宜）。
+实测算例：一条 7 镜 premium 成片供应商成本 $2.68 ≈ 19.3 元，
+创作者版按点数只卖 13.13 元 —— 卖一条亏 6 元。
+`tests/test_plan_pricing_margin.py` 现在把这条不变量钉死了。
+
 对外只展示「点数」，不暴露供应商真实成本结构。
 """
 
@@ -69,7 +90,7 @@ PLANS: dict[PlanTier, Plan] = {
         tier=PlanTier.STARTER,
         name="创作者版",
         tagline="给做号的人：稳定出片，去掉水印",
-        price_cny=49,
+        price_cny=216,
         monthly_credits=3_000,
         max_shots_per_project=8,
         max_concurrent_jobs=1,
@@ -89,7 +110,7 @@ PLANS: dict[PlanTier, Plan] = {
         tier=PlanTier.PRO,
         name="专业版",
         tagline="给小团队：并发、批量、可试用 API",
-        price_cny=199,
+        price_cny=1080,
         monthly_credits=15_000,
         max_shots_per_project=12,
         max_concurrent_jobs=3,
@@ -110,7 +131,7 @@ PLANS: dict[PlanTier, Plan] = {
         tier=PlanTier.STUDIO,
         name="工作室版",
         tagline="给工作室：高并发与优先调度",
-        price_cny=699,
+        price_cny=4320,
         monthly_credits=60_000,
         max_shots_per_project=12,
         max_concurrent_jobs=8,
