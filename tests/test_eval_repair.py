@@ -24,7 +24,11 @@ from __future__ import annotations
 import pytest
 
 from reelagent.agents.evaluator import Evaluator, _retryable_shots
-from reelagent.eval.consistency import clue_reference_coverage, wilson_lower_bound
+from reelagent.eval.consistency import (
+    base_image_coverage,
+    clue_reference_coverage,
+    wilson_lower_bound,
+)
 from reelagent.schema import Clue, Shot
 
 
@@ -242,3 +246,67 @@ class TestRepairLoopEndToEnd:
             pipe.run(project.id, max_shots=3)
         finally:
             mock_mod.MockImageProvider.generate = original
+
+
+class TestBaseImageCoverage:
+    """链路最上游：基准图是否真的生成出来了。
+
+    真实事故（生产 proj_01M5HR2CTVAJM9J7XVRTD34AHZ）：
+    主角「灰风衣女人」的基准图生成失败，重试 2 次后放弃，
+    失败只写进 tracer。之后 3 个镜头全部没有主角设定图锚定，
+    跨镜头一致性从根上失效 —— 而门禁只报了一条文本保真度，
+    看起来像措辞问题。
+    """
+
+    def test_all_present(self) -> None:
+        clues = [
+            _clue("c1", with_base_image=True),
+            _clue("c2", with_base_image=True),
+        ]
+        cov, detail = base_image_coverage(clues)
+        assert cov == 1.0
+        assert detail["missing"] == []
+
+    def test_missing_character_is_reported_by_name(self) -> None:
+        clues = [
+            _clue("夜行女人", with_base_image=False),
+            _clue("黑伞", with_base_image=True),
+            _clue("风铃", with_base_image=True),
+            _clue("收银员", with_base_image=True),
+        ]
+        cov, detail = base_image_coverage(clues)
+        assert cov == pytest.approx(0.75)
+        assert detail["missing"] == ["夜行女人"], "必须指名道姓，否则无法定位"
+
+    def test_clue_without_appearance_is_not_eligible(self) -> None:
+        clue = Clue(id="c1", kind="prop", name="c1", appearance="", base_image="")
+        cov, detail = base_image_coverage([clue])
+        assert cov is None, "没有外观描述就没有可度量的对象"
+        assert detail["eligible"] == 0
+
+    def test_gate_fails_and_points_at_assets_stage(self) -> None:
+        metrics = _metrics(cov=1.0, uncovered=[])
+        metrics["base_image_coverage"] = 0.75
+        metrics["base_image_detail"] = {"eligible": 4, "covered": 3, "missing": ["灰风衣女人"]}
+
+        gate = Evaluator._gate(metrics, {"overall": 4.5}, [])
+
+        assert gate["passed"] is False
+        assert any("基准图缺失" in f for f in gate["failures"]), gate["failures"]
+        assert any("灰风衣女人" in f for f in gate["failures"]), "必须指出是哪个线索"
+        # 修它要重跑 assets，不是重跑镜头
+        assert gate["retryable_stage"] == "assets"
+        assert gate["retryable_shots"] == [], "基准图缺失不靠重跑镜头修复"
+
+    def test_gate_passes_when_all_base_images_exist(self) -> None:
+        metrics = _metrics(cov=1.0, uncovered=[])
+        metrics["base_image_coverage"] = 1.0
+        metrics["base_image_detail"] = {"eligible": 4, "covered": 4, "missing": []}
+
+        gate = Evaluator._gate(metrics, {"overall": 4.5}, [])
+        assert gate["passed"] is True
+        assert gate["retryable_stage"] is None
+
+    def test_threshold_declared(self) -> None:
+        gate = Evaluator._gate(_metrics(cov=1.0, uncovered=[]), None, [])
+        assert gate["thresholds"]["base_image_coverage"] == 1.00

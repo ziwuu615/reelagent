@@ -115,8 +115,23 @@ class Evaluator(Agent):
         """
         failures: list[str] = []
 
+        bic = metrics.get("base_image_coverage")
         cov = metrics["clue_reference_coverage"]
         fid = metrics["prompt_clue_fidelity"]
+
+        # 链路最上游：基准图是否真的生成出来了。
+        #
+        # 这一条必须排在覆盖率之前检查，因为它是覆盖率的前提 ——
+        # 基准图没生成，就没有引用可传，下游指标会「因为无对象可测」
+        # 而返回 None 或虚高的值，把问题掩盖掉。
+        if bic is not None and bic < 1.0:
+            missing = (metrics.get("base_image_detail") or {}).get("missing") or []
+            names = "、".join(str(m) for m in missing[:3])
+            extra = f" 等 {len(missing)} 个" if len(missing) > 3 else ""
+            failures.append(
+                f"基准图缺失：{names}{extra} 没有生成设定图，"
+                "这些线索在所有镜头里都没有视觉锚点，跨镜头一致性无法保证"
+            )
 
         # 一致性策略未生效是最严重的问题：说明基准图/外观描述根本没被用起来
         if cov is None and fid is None:
@@ -149,7 +164,18 @@ class Evaluator(Agent):
             #:     色调漂移与 LLM 评审低分是全局指标，归因不到具体镜头。
             #:     这些重试只会白花钱，所以不放进这个列表。
             "retryable_shots": _retryable_shots(metrics, shots),
+            #: 需要重跑哪个阶段才能修复（目前只有 assets）。
+            #:
+            #: 基准图缺失**不能**靠重跑镜头修复 —— 镜头生成时会去读
+            #: `clue.base_image`，那个字段是空的，重跑一百次也没有锚点。
+            #: 唯一有效的动作是重跑 assets 阶段把设定图补上，
+            #: 然后再全量重跑 generate（因为所有镜头都缺锚点）。
+            #:
+            #: 这条路会花掉一次完整生成的钱，所以这里只**报告**
+            #: 不自动执行 —— 让调用方或人决定值不值得重来。
+            "retryable_stage": "assets" if (bic is not None and bic < 1.0) else None,
             "thresholds": {
+                "base_image_coverage": 1.00,
                 "prompt_clue_fidelity": 0.95,
                 "clue_reference_coverage": 0.90,
                 "palette_stability": 0.50,

@@ -195,6 +195,41 @@ def rhythm_variety(shots: list[Shot]) -> dict[str, Any]:
     }
 
 
+def base_image_coverage(clues: list[Clue]) -> tuple[float | None, dict[str, Any]]:
+    """有外观描述的线索里，实际生成了基准图的比例。
+
+    ## 为什么这个指标必须存在
+
+    它在整条一致性链路的最上游：
+
+        线索外观 -> 基准图 -> 每个镜头的 ref_images -> 视频首帧
+
+    `clue_reference_coverage` 衡量的是第三步「镜头有没有引用基准图」。
+    但如果**基准图压根没生成出来**，就没有引用可传 —— 上游断了，
+    下游所有指标却完全正常。
+
+    真实事故（2026-10-22 生产运行 proj_01M5HR2CTVAJM9J7XVRTD34AHZ）：
+    主角「灰风衣女人」的基准图生成失败，ArtDirector 重试 2 次后放弃，
+    失败只写进 tracer（`art_director.base_image.failed`）。
+    之后 3 个镜头全部没有主角设定图锚定，跨镜头一致性从根上失效；
+    而门禁只报了一条「文本保真度 0.33」—— 看起来像措辞问题，
+    实际是主角的脸根本没有被锚定过。
+
+    这就是「可归因」必须覆盖到链路**每一环**的原因：
+    只测中间环节，上游断了也看不出来。
+    """
+    eligible = [c for c in clues if (c.appearance or "").strip()]
+    if not eligible:
+        return None, {"eligible": 0, "covered": 0, "missing": []}
+    covered = [c for c in eligible if c.base_image]
+    missing = [c.name for c in eligible if not c.base_image]
+    return round(len(covered) / len(eligible), 4), {
+        "eligible": len(eligible),
+        "covered": len(covered),
+        "missing": missing,
+    }
+
+
 def build_metrics(
     shots: list[Shot],
     clues: list[Clue],
@@ -205,22 +240,25 @@ def build_metrics(
 
     pal = palette_stability(kf_paths)
     css, per_clue = cross_shot_clue_similarity(shots, clue_map, workspace)
+    bic, bic_detail = base_image_coverage(clues)
     cov, cov_detail = clue_reference_coverage(shots, clue_map)
     fid, misses = prompt_clue_fidelity(shots, clue_map)
     rhythm = rhythm_variety(shots)
 
     # 综合分：只对"有可度量对象"的维度取均值，None 表示该维度不适用
-    parts = [v for v in (pal, css, cov, fid) if v is not None]
+    parts = [v for v in (pal, css, bic, cov, fid) if v is not None]
     overall = round(float(np.mean(parts)), 4) if parts else 0.0
 
     return {
         "overall": overall,
         "palette_stability": pal,
         "cross_shot_clue_similarity": css,
+        "base_image_coverage": bic,
         "clue_reference_coverage": cov,
         "prompt_clue_fidelity": fid,
         "consistency_strategy_active": bool(cov),
         "per_clue_similarity": per_clue,
+        "base_image_detail": bic_detail,
         "coverage_detail": cov_detail,
         "fidelity_misses": misses[:10],
         "rhythm": rhythm,
