@@ -112,8 +112,16 @@ async def list_artifacts(
 
 
 async def find_final_artifact(session: AsyncSession, *, org_id: str, project_id: str) -> Artifact | None:
-    """取成片：优先 MP4，其次 GIF。"""
-    for kind in (ArtifactKind.VIDEO, ArtifactKind.GIF):
+    """取成片。
+
+    优先 `FINAL_VIDEO`（明确标记的整条成片），再退回 `VIDEO` / `GIF` ——
+    退回分支只服务于**改造前留下的旧数据**（那时成片和镜头片段共用 VIDEO）。
+
+    为什么必须优先用明确的 kind：旧实现只按创建时间倒序取第一条 VIDEO，
+    而一条流水线会写入多个 mp4，谁更晚取决于插入顺序。顺序一旦变化，
+    用户点「下载成片」拿到的就是某个镜头片段 —— 不报错，只是静默给错东西。
+    """
+    for kind in (ArtifactKind.FINAL_VIDEO, ArtifactKind.VIDEO, ArtifactKind.GIF):
         row = (
             await session.execute(
                 select(Artifact)

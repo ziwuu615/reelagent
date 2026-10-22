@@ -508,6 +508,9 @@ async def _collect_artifacts(
 
     uploaded: list[str] = []
     rows: list[Artifact] = []
+    # 实际上传字节数。之前在日志里写死 `bytes=0` —— 那个字段从来没被测量过，
+    # 排查「产物是不是真的传上去了、量级对不对」时完全没用。
+    total_bytes = 0
 
     # 目录型产物
     for subdir, kind, default_type in ARTIFACT_DIRS:
@@ -536,6 +539,7 @@ async def _collect_artifacts(
                 )
             )
             uploaded.append(key)
+            total_bytes += int(stored.size_bytes or 0)
 
     # final 目录
     final_dir = engine_project_dir / "final"
@@ -544,7 +548,10 @@ async def _collect_artifacts(
             if not path.is_file():
                 continue
             if path.suffix.lower() == ".mp4":
-                kind = ArtifactKind.VIDEO
+                # final 目录下的 mp4 是**整条成片**，与 clips 里的镜头片段分开。
+                # 早期两者都用 VIDEO，取成片只能靠创建时间倒序猜 ——
+                # 顺序一变就会把某个镜头片段当成成片给用户下载（见 ArtifactKind 说明）。
+                kind = ArtifactKind.FINAL_VIDEO
             elif path.suffix.lower() == ".gif":
                 kind = ArtifactKind.GIF
             elif path.suffix.lower() == ".wav":
@@ -576,6 +583,7 @@ async def _collect_artifacts(
                 )
             )
             uploaded.append(key)
+            total_bytes += int(stored.size_bytes or 0)
 
     if rows:
         async with session_scope() as session:
@@ -592,7 +600,7 @@ async def _collect_artifacts(
             session.add_all(rows)
             await session.flush()
 
-    log.info("artifacts_collected", job_id=job_id, count=len(rows), bytes=0)
+    log.info("artifacts_collected", job_id=job_id, count=len(rows), bytes=total_bytes)
     return uploaded
 
 
@@ -782,17 +790,70 @@ def _short_error_code(error: str) -> str:
     return m.group(1) if m else "unknown"
 
 
-def cleanup_workspace(workspace: Path) -> None:
+def cleanup_workspace(workspace: Path, *, keep: bool = False) -> None:
     """任务结束后回收临时工作区。产物已经进对象存储，本地副本不再需要。
 
     **必须在读取引擎成本数据之后调用** —— `usage_records` 的原始数据来源
     就是工作区里的 `reelagent.db`，删早了这笔账就永久丢了。
+
+    ## 为什么失败时保留（`keep=True`）
+
+    工作区里有排查一次失败所需的**全部现场**：`reelagent.db`（每个阶段的
+    状态、每次供应商调用的 span 与错误、逐次成本）、引擎的 project JSON
+    （每个镜头的 prompt、状态、错误）、以及中间产物文件。
+
+    这些一旦删掉就再也拿不回来。真实教训：查「文本保真度为什么是 0.3」时，
+    工作区已被删除，只能靠数据库里残留的 `projects.clues` / `projects.script`
+    JSON 勉强还原 —— 而引擎侧的 prompt 构建细节、span 错误全文都无从查证。
+
+    成功的任务不需要保留：产物已进对象存储，逐次成本与成败已进
+    `usage_records`，工作区没有额外信息。所以只在失败时保留，
+    并由 `sweep_stale_workspaces` 按时间清掉，避免磁盘无限增长。
     """
+    if keep:
+        try:
+            size = sum(f.stat().st_size for f in workspace.rglob("*") if f.is_file())
+        except OSError:
+            size = 0
+        log.warning(
+            "workspace_kept_for_debug",
+            path=str(workspace),
+            bytes=size,
+            hint="任务失败，保留工作区以便排查；到期后由 sweep_stale_workspaces 清理",
+        )
+        return
     try:
         if workspace.exists():
             shutil.rmtree(workspace, ignore_errors=True)
     except Exception as exc:  # pragma: no cover
         log.warning("workspace_cleanup_failed", path=str(workspace), error=str(exc))
+
+
+def sweep_stale_workspaces(root: Path, *, max_age_hours: float = 72.0) -> int:
+    """清掉超期的工作区，避免失败任务累积把磁盘撑满。
+
+    失败才保留，但保留不能无限期 —— 一个反复失败的任务会一直攒下去。
+    默认 72 小时：够排查完一个线上问题，又不至于长期占用。
+    """
+    import time as _time
+
+    if not root.exists():
+        return 0
+    cutoff = _time.time() - max_age_hours * 3600
+    removed = 0
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            if child.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(child, ignore_errors=True)
+            removed += 1
+        except OSError as exc:  # pragma: no cover
+            log.warning("workspace_sweep_failed", path=str(child), error=str(exc))
+    if removed:
+        log.info("workspace_swept", count=removed, max_age_hours=max_age_hours)
+    return removed
 
 
 # --------------------------------------------------------------------------- #

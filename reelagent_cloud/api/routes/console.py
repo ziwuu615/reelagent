@@ -280,7 +280,18 @@ async def project_detail(
     job_rows = await jobs.list_for_project(session, project_id)
     artifacts = await projects.list_artifacts(session, org_id=principal.org_id, project_id=project_id)
 
-    final = next((a for a in artifacts if a.kind in (ArtifactKind.VIDEO, ArtifactKind.GIF)), None)
+    # 成片：先找明确标记的 FINAL_VIDEO，找不到再退回旧的 VIDEO/GIF。
+    #
+    # 必须分两步，不能用 `next(a for a in artifacts if a.kind in (...))` ——
+    # artifacts 按创建时间**升序**，那个写法会返回第一个镜头片段。
+    # 旧代码就是这样（那时只有 VIDEO），意味着项目详情页的「成片」
+    # 实际拿到的是第一段片段。现在靠 FINAL_VIDEO 区分才能取对。
+    final = next((a for a in artifacts if a.kind is ArtifactKind.FINAL_VIDEO), None)
+    if final is None:
+        # 改造前产生的旧数据：成片与片段共用 VIDEO，无法可靠区分。
+        # 取最后一个（成片在批次里最后写入），这是旧数据唯一可用的近似。
+        legacy = [a for a in artifacts if a.kind in (ArtifactKind.VIDEO, ArtifactKind.GIF)]
+        final = legacy[-1] if legacy else None
     storyboard = next((a for a in artifacts if a.kind == ArtifactKind.STORYBOARD), None)
     audio = next((a for a in artifacts if a.kind == ArtifactKind.AUDIO), None)
     keyframes = {a.shot_key: a for a in artifacts if a.kind == ArtifactKind.KEYFRAME}

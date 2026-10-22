@@ -165,14 +165,24 @@
       {% endif %}
 
       <div class="card-foot">
-        <form method="post" action="/app/settings/api-keys" class="flex-center grow" style="gap:10px">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label class="hide" for="key-name">密钥名称</label>
-          <input type="text" id="key-name" name="name" maxlength="80" placeholder="密钥名称，例如：剪辑脚本"
-                 style="max-width:280px" {% if not is_admin %}disabled{% endif %}>
-          <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>创建密钥</button>
-        </form>
-        {% if not is_admin %}<span class="muted small">需要管理员权限</span>{% endif %}
+        {% if plan.is_free %}
+          {# 免费版不能建 API Key 是刻意的产品门槛（accounts.create_api_key 会拒）。
+             之前这里照常渲染可用的表单，用户填完点提交才收到 403 ——
+             一个「看起来能用、实际一定失败」的入口比没有入口更糟。 #}
+          <span class="muted small">
+            API Key 需要专业版及以上（当前：{{ plan.name }}）。
+            <a href="/app/billing">查看套餐</a>
+          </span>
+        {% else %}
+          <form method="post" action="/app/settings/api-keys" class="flex-center grow" style="gap:10px">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="hide" for="key-name">密钥名称</label>
+            <input type="text" id="key-name" name="name" maxlength="80" placeholder="密钥名称，例如：剪辑脚本"
+                   style="max-width:280px" {% if not is_admin %}disabled{% endif %}>
+            <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>创建密钥</button>
+          </form>
+          {% if not is_admin %}<span class="muted small">需要管理员权限</span>{% endif %}
+        {% endif %}
       </div>
     </section>
 

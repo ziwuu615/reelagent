@@ -148,6 +148,10 @@ class Worker:
         started = time.perf_counter()
 
         heartbeat = asyncio.create_task(self._heartbeat_loop(job_id, cancel_event))
+        # 失败时保留工作区（里面有一次失败的全部现场），成功时清掉。
+        # 用标志位而不是在 finally 里判断异常类型 —— 成功路径最后一步是
+        # _finish_success，它自己也可能抛，混在一起会误判。
+        succeeded = False
         try:
             if kind is JobKind.GENERATE_PROJECT:
                 outcome = await pipeline_svc.execute_generation(
@@ -167,6 +171,7 @@ class Worker:
                 raise NotImplementedError(f"暂不支持的任务类型：{kind.value}")
 
             await self._finish_success(job_id, outcome)
+            succeeded = True
             job_duration.labels(kind=kind.value).observe(time.perf_counter() - started)
 
         except pipeline_svc.GenerationCancelled as exc:
@@ -182,8 +187,8 @@ class Worker:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
-            # 清掉临时工作区
-            pipeline_svc.cleanup_workspace(self.settings.engine_workspace / job_id)
+            # 清掉临时工作区（失败时保留，见 cleanup_workspace 的说明）
+            pipeline_svc.cleanup_workspace(self.settings.engine_workspace / job_id, keep=not succeeded)
 
     async def _finish_success(self, job_id: str, outcome: pipeline_svc.GenerationOutcome) -> None:
         async with session_scope() as session:
@@ -257,6 +262,12 @@ class Worker:
                     await jobs_svc.queue_depths(session)
             except Exception as exc:  # pragma: no cover
                 log.warning("reap_failed", error=str(exc))
+            # 失败任务的工作区会保留以便排查，但必须设上限 ——
+            # 一个反复失败的任务会一直攒，最终把磁盘撑满。
+            try:
+                pipeline_svc.sweep_stale_workspaces(self.settings.engine_workspace)
+            except Exception as exc:  # pragma: no cover
+                log.warning("workspace_sweep_error", error=str(exc))
 
         if self.settings.email.enabled and now - self._last_email > EMAIL_INTERVAL_SECONDS:
             self._last_email = now

@@ -113,7 +113,19 @@ class JobStage(StrEnum):
 # 产物
 # --------------------------------------------------------------------------- #
 class ArtifactKind(StrEnum):
-    VIDEO = "video"
+    """产物类型。
+
+    `FINAL_VIDEO` 与 `VIDEO` 必须分开，不能都叫 video：
+
+    镜头片段（`VIDEO`）和整条成片（`FINAL_VIDEO`）都是 mp4，早期两者共用
+    `VIDEO`，取成片只能靠「按创建时间倒序取第一条」猜。而一条流水线会在
+    同一批里写入 3~10 个 mp4，谁的时间戳更晚取决于数据库插入顺序 ——
+    一旦顺序变了，`find_final_artifact` 就会把某个**镜头片段**当成成片返回，
+    用户点「下载成片」拿到的是一小段。这种错误不会报错，只会静默给错东西。
+    """
+
+    VIDEO = "video"  # 镜头片段
+    FINAL_VIDEO = "final_video"  # 整条成片
     GIF = "gif"
     AUDIO = "audio"
     KEYFRAME = "keyframe"
