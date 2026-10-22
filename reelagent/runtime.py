@@ -131,6 +131,11 @@ class Runtime:
                     quantity=resp.usage.total_tokens,
                     usd=resp.cost_usd,
                     meta={"task": task, "span": span_name},
+                    # LLM 是与媒体调用并列的一类真实耗时（一次 prompt 构建
+                    # 就要十几秒，占了流水线相当比例的墙钟时间）。
+                    # 之前只写进 span，成本行是 NULL —— 于是「哪一步最慢」
+                    # 在 usage_records 里永远看不到 LLM 这一块。
+                    latency_ms=round(resp.latency_ms, 1),
                 )
                 sp.set(
                     prompt_tokens=resp.usage.prompt_tokens,
