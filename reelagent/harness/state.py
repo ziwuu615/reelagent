@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS costs (
     quantity    REAL NOT NULL DEFAULT 0,
     usd         REAL NOT NULL DEFAULT 0,
     ts          REAL NOT NULL,
-    meta        TEXT
+    meta        TEXT,
+    latency_ms  REAL
 );
 CREATE INDEX IF NOT EXISTS idx_costs_project ON costs(project_id);
 """
@@ -118,7 +119,22 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """给已存在的旧库补齐后加的列。
+
+        `CREATE TABLE IF NOT EXISTS` 对已经存在的表**什么都不做** ——
+        新列不会自动出现在旧库里。断点续跑会打开之前某次运行留下的
+        `reelagent.db`，如果不补列，插入带 latency_ms 的成本行会直接报错，
+        整个任务失败。
+
+        逐列检查而不是只看版本号：改动小、可重复执行、不需要维护迁移表。
+        """
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(costs)").fetchall()}
+        if "latency_ms" not in existing:
+            self._conn.execute("ALTER TABLE costs ADD COLUMN latency_ms REAL")
 
     def close(self) -> None:
         with self._lock:
@@ -407,11 +423,21 @@ class Store:
         quantity: float = 0.0,
         usd: float = 0.0,
         meta: dict[str, Any] | None = None,
+        latency_ms: float | None = None,
     ) -> None:
+        """记一笔成功调用的成本。
+
+        `latency_ms` 是这个调用本身的耗时。为什么必须存在成本行里而不是只在
+        span 里：成本行是「这次调用值多少钱」的权威记录，而耗时是判断
+        「这条路值不值得走」的关键前提（比如 express 档比 standard 贵 54%，
+        值不值取决于快多少）。此前耗时只写在 span 上，成功调用在
+        `usage_records` 里 latency 恒为 0 —— 延迟分析只能覆盖失败的调用，
+        等于没法回答「哪个模型更快」。
+        """
         with self._lock:
             self._conn.execute(
-                "INSERT INTO costs(project_id, category, provider, model, unit, quantity, usd, ts, meta) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO costs(project_id, category, provider, model, unit, quantity, usd, ts, meta, latency_ms) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     project_id,
                     category,
@@ -422,6 +448,7 @@ class Store:
                     usd,
                     time.time(),
                     json.dumps(meta or {}, ensure_ascii=False),
+                    latency_ms,
                 ),
             )
             self._conn.commit()
@@ -467,7 +494,7 @@ class Store:
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT category, provider, model, unit, quantity, usd, ts, meta "
+                "SELECT category, provider, model, unit, quantity, usd, ts, meta, latency_ms "
                 "FROM costs WHERE project_id=? ORDER BY id",
                 (project_id,),
             ).fetchall()
@@ -487,6 +514,7 @@ class Store:
                     "usd": float(r["usd"] or 0.0),
                     "ts": float(r["ts"] or 0.0),
                     "meta": meta if isinstance(meta, dict) else {},
+                    "latency_ms": float(r["latency_ms"]) if r["latency_ms"] is not None else None,
                 }
             )
         return out

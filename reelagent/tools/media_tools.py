@@ -96,12 +96,24 @@ def register_media_tools(rt: Runtime) -> None:
             shot_id=shot_id,
             refs=len(refs),
             consistency=consistency,
+            # 在调用**之前**写下供应商归属。
+            #
+            # 为什么不能只在成功之后 sp.set：失败时 res 根本不存在，
+            # 于是失败的 span 永远没有 provider/model，`usage_records` 里
+            # 只能记成空字符串，失败率就无法按供应商归因
+            # （实测：image 20% 失败率，但看不出是哪个供应商）。
+            #
+            # 这两个值在调用前就已确定，写下来是**事实**而不是拿当前配置
+            # 回填的猜测 —— 后者会产生「看起来有归属、实际是猜的」数据。
+            provider=getattr(image_p, "name", "") or "",
+            model=getattr(image_p, "model", "") or "",
         ) as sp:
             started = time.perf_counter()
             res = image_p.generate(prompt=prompt, out_path=out, size=size, ref_images=refs, seed=seed)
             # 供应商可能返回纯色图（见 _assert_image_not_degenerate 的说明）。
             # 必须在**计费与落盘确认之前**就发现，否则会把一张黑图当成有效产物。
             _assert_image_not_degenerate(out, what=f"关键帧（{shot_id or out.name}）")
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
             rt.record_media_cost(
                 category="image",
                 provider=res.provider,
@@ -110,12 +122,13 @@ def register_media_tools(rt: Runtime) -> None:
                 quantity=1,
                 usd=res.cost_usd,
                 meta={"shot_id": shot_id, "consistency": consistency},
+                latency_ms=elapsed_ms,
             )
             sp.set(
                 provider=res.provider,
                 model=res.model,
                 cost_usd=res.cost_usd,
-                latency_ms=round((time.perf_counter() - started) * 1000, 1),
+                latency_ms=elapsed_ms,
             )
             return {
                 "path": rt.rel(res.path),
@@ -174,6 +187,11 @@ def register_media_tools(rt: Runtime) -> None:
             shot_id=shot_id,
             routed=("video_model" if use_video_model else "local_motion"),
             consistency=consistency,
+            # 调用前写下供应商归属，理由同 generate_keyframe：
+            # 失败时拿不到 res，只能靠这里。视频调用最容易因限流/额度失败，
+            # 没有归属就无法回答「哪个模型的失败率最高」。
+            provider=getattr(provider, "name", "") or "",
+            model=getattr(provider, "model", "") or "",
         ) as sp:
             started = time.perf_counter()
             res = provider.generate(
@@ -191,6 +209,7 @@ def register_media_tools(rt: Runtime) -> None:
             # 就会出现「数量 3.2、金额按 3 算」的错位 —— 按单位价做分析时
             # 算出来的单价会偏，且与账单对不上。
             billed_seconds = float(res.meta.get("duration_s") or duration_s)
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
             rt.record_media_cost(
                 category="video",
                 provider=res.provider,
@@ -205,12 +224,13 @@ def register_media_tools(rt: Runtime) -> None:
                     "requested_seconds": duration_s,
                     "fast_model": use_fast,
                 },
+                latency_ms=elapsed_ms,
             )
             sp.set(
                 provider=res.provider,
                 model=res.model,
                 cost_usd=res.cost_usd,
-                latency_ms=round((time.perf_counter() - started) * 1000, 1),
+                latency_ms=elapsed_ms,
             )
             return {
                 "path": rt.rel(res.path),
@@ -224,9 +244,18 @@ def register_media_tools(rt: Runtime) -> None:
     # ------------------------------------------------------------------ #
     def synthesize_speech(text: str, out_name: str, shot_id: str = "") -> dict[str, Any]:
         out = rt.dir_for(rt.project_id, "audio") / out_name
-        with rt.tracer.span("tool.synthesize_speech", kind="tool", shot_id=shot_id, chars=len(text)) as sp:
+        with rt.tracer.span(
+            "tool.synthesize_speech",
+            kind="tool",
+            shot_id=shot_id,
+            chars=len(text),
+            # 调用前写下供应商归属（理由见 generate_keyframe）
+            provider=getattr(tts_p, "name", "") or "",
+            model=getattr(tts_p, "model", "") or "",
+        ) as sp:
             started = time.perf_counter()
             res = tts_p.generate(text=text, out_path=out)
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
             rt.record_media_cost(
                 category="tts",
                 provider=res.provider,
@@ -235,12 +264,13 @@ def register_media_tools(rt: Runtime) -> None:
                 quantity=len(text),
                 usd=res.cost_usd,
                 meta={"shot_id": shot_id},
+                latency_ms=elapsed_ms,
             )
             sp.set(
                 provider=res.provider,
                 model=res.model,
                 cost_usd=res.cost_usd,
-                latency_ms=round((time.perf_counter() - started) * 1000, 1),
+                latency_ms=elapsed_ms,
             )
             return {
                 "path": rt.rel(res.path),

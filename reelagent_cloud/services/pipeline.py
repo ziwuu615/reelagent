@@ -411,6 +411,21 @@ async def execute_generation(
             project_id=project_id,
             workspace=workspace,
             engine_project_id=engine_project_id,
+            # 兜底用的「当前配置供应商」。
+            #
+            # 正常情况下失败调用的 span 已经带上了真实 provider
+            # （工具层在调用前就写入），不依赖这个。它只在 span 缺归属时
+            # 生效，且落库时会用 `cfg:` 前缀标明「这条归属是配置推断的、
+            # 不是上游上报的」—— 让读数据的人自己判断可信度。
+            #
+            # 之前这个参数从未被传过，导致 ① 失败记录的 provider 恒为空
+            # ② `cfg:` 前缀在撒谎（什么都没推断却标成推断）。
+            configured_providers={
+                "image": settings.providers.image.provider,
+                "video": settings.providers.video.provider,
+                "tts": settings.providers.tts.provider,
+                "llm": settings.providers.llm.provider,
+            },
         )
     except Exception as exc:  # pragma: no cover - 兜底，避免影响出片
         log.warning("usage_records_failed", job_id=job_id, error=str(exc))
@@ -682,6 +697,10 @@ async def _persist_usage_records(
                 quantity=float(c.get("quantity") or 0.0),
                 provider_cost_usd=round(float(c.get("usd") or 0.0), 6),
                 credits_charged=0,
+                # 成功调用的耗时来自成本行（引擎在 record_media_cost 里一起写）。
+                # 此前只有失败的 span 有延迟，成功调用恒为 NULL ——
+                # 于是「哪个模型更快」这个问题只能靠手工实测，系统自己答不出来。
+                latency_ms=(int(float(c["latency_ms"])) if c.get("latency_ms") is not None else None),
                 success=True,
                 error_code="",
             )

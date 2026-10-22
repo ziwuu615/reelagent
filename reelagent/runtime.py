@@ -164,6 +164,7 @@ class Runtime:
         quantity: float,
         usd: float,
         meta: dict[str, Any] | None = None,
+        latency_ms: float | None = None,
     ) -> None:
         self.store.record_cost(
             project_id=self.project_id,
@@ -174,6 +175,7 @@ class Runtime:
             quantity=quantity,
             usd=usd,
             meta=meta,
+            latency_ms=latency_ms,
         )
 
     def spent_usd(self) -> float:
