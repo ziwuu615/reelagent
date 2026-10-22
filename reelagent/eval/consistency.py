@@ -138,14 +138,22 @@ def clue_reference_coverage(shots: list[Shot], clues: dict[str, Clue]) -> tuple[
 
     没有任何镜头绑定带基准图的线索时返回 None（而不是 1.0）——
     "没有可度量的对象"与"全部达标"是两回事，混为一谈会让指标失去意义。
+
+    `uncovered_shots` 记录**具体是哪些镜头没达标**。
+    只报一个覆盖率数字是不够的：知道「覆盖了 2/3」无法指导修复，
+    知道「sc02_sh01 没跟上」才能只重跑那一镜。
+    这也是「可归因」与「一个评分」的区别。
     """
     eligible = [s for s in shots if any(clues.get(c) and clues[c].base_image for c in s.clue_ids)]
     if not eligible:
-        return None, {"eligible": 0, "covered": 0}
-    covered = [s for s in eligible if s.status in {"keyframe_done", "clip_done", "audio_done"}]
+        return None, {"eligible": 0, "covered": 0, "uncovered_shots": []}
+    done_status = {"keyframe_done", "clip_done", "audio_done"}
+    covered = [s for s in eligible if s.status in done_status]
+    uncovered = [s.id for s in eligible if s.status not in done_status]
     return round(len(covered) / len(eligible), 4), {
         "eligible": len(eligible),
         "covered": len(covered),
+        "uncovered_shots": uncovered,
     }
 
 

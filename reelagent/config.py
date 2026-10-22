@@ -185,6 +185,18 @@ class Settings:
     context_budget: int = 24000
     max_concurrency: int = 3
     max_attempts: int = 3
+    #: 评估后的自动修复轮数上限。
+    #:
+    #: 评测发现「某些镜头绑定了基准图却没生成成功」时，会只重跑那些镜头
+    #: 再重新评测 —— 这是唯一「重跑确实有救」的失败类别。
+    #:
+    #: 为什么要有上限而不是一直重试：
+    #:   1. 每轮都真花钱（重跑镜头 = 重新调图像/视频/语音）
+    #:   2. 如果失败是系统性的（配额耗尽、模型下线），重试不会变好
+    #:   3. 用户等不起无限循环
+    #: 取 2：给一次「偶发失败」的机会，又不至于在必败场景里空转。
+    #: 设为 0 即关闭自动修复，退化为「只报告不重试」。
+    max_repair_rounds: int = 2
     ffmpeg: str | None = None
 
     llm: ProviderConfig = field(default_factory=lambda: ProviderConfig(name="llm", model=""))
@@ -216,6 +228,7 @@ class Settings:
             context_budget=_env_int("REEL_CONTEXT_BUDGET", 24000),
             max_concurrency=_env_int("REEL_MAX_CONCURRENCY", 3),
             max_attempts=_env_int("REEL_MAX_ATTEMPTS", 3),
+            max_repair_rounds=_env_int("REEL_MAX_REPAIR_ROUNDS", 2),
             ffmpeg=ffmpeg,
             llm=ProviderConfig(
                 name="llm",
