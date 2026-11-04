@@ -32,7 +32,7 @@ from ..domain.ids import PREFIX, new_id
 from ..domain.plans import get_plan
 from ..observability import get_logger, projects_created_total
 from ..security import Principal
-from . import audit, credits, jobs
+from . import audit, credits, jobs, quotas
 
 log = get_logger(__name__)
 
@@ -273,11 +273,13 @@ async def create_project(
     if plan.max_projects >= 0 and counts["total"] >= plan.max_projects:
         raise Forbidden(f"{plan.name}最多保留 {plan.max_projects} 个项目，请删除旧项目或升级套餐")
 
-    active_jobs = await jobs.active_count(session, org.id)
-    if auto_start and active_jobs >= plan.max_concurrent_jobs:
-        raise Forbidden(
-            f"{plan.name}同时只能有 {plan.max_concurrent_jobs} 个生成任务在跑，请等待完成或升级套餐"
-        )
+    # 配额校验（并发 + 每日上限）。放在幂等短路之后：重复提交同一 Key 时
+    # 必须原样返回首次项目，不能被配额挡住 —— 否则「网络超时后重试」
+    # 会变成「被告知已达上限」。
+    #
+    # 只在 auto_start 时校验：不立即可生成的项目不会建任务，也就不占配额。
+    if auto_start:
+        await quotas.check_can_create(session, org=org, plan=plan)
 
     shot_count = shots or plan.max_shots_per_project
     shot_count = max(1, min(shot_count, plan.max_shots_per_project, settings.max_shots_per_project))
