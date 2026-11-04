@@ -1,0 +1,176 @@
+# ReelAgent 告警规则
+#
+# 设计原则（按「能不能直接行动」排序）：
+#   1. 每条告警都必须对应一个**具体的下一步动作**。对不出动作的告警是噪音。
+#   2. 资金类告警一律 P0：账本漂移不是「性能问题」，是有笔钱对不上。
+#   3. 用 for: 抑制抖动，但资金/合规类不加 for —— 哪怕一次也必须立刻知道。
+#
+# 指标来源：reelagent_cloud/observability/metrics.py
+
+groups:
+  # ------------------------------------------------------------------ #
+  # P0：资金与合规。这几条没有「观察一下」的余地。
+  # ------------------------------------------------------------------ #
+  - name: reelagent-money-integrity
+    rules:
+      - alert: LedgerDriftDetected
+        expr: increase(reelagent_ledger_drift_total[10m]) > 0
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "账本与余额不一致（{{ $value }} 个机构）"
+          description: >-
+            SUM(ledger_entries.amount) != organizations.credits_balance。
+            这是资金事故，不是数据问题：先冻结相关机构的下单入口，
+            再用 reconcile(org_id) 定位漂移方向（正=多给用户，负=多扣用户）。
+          runbook: docs/OPERATIONS.md#账本漂移
+
+      - alert: LedgerDriftLarge
+        expr: reelagent_ledger_drift_amount > 10000
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "单机构账本漂移额度 {{ $value }}（超过 1 万点）"
+          description: "量级已远超「偶发重复记账」，大概率是并发写入路径出问题。"
+
+      - alert: ModerationBlockSpike
+        expr: increase(reelagent_moderation_blocked_total[30m]) > 20
+        labels:
+          severity: warning
+          team: trust-safety
+        annotations:
+          summary: "内容审核拦截量异常（30 分钟内 {{ $value }} 次）"
+          description: >-
+            两种可能：遭到恶意刷量，或词库/策略误杀正常内容。
+            看 scope 与 category 分布区分：集中在单一 scope 多为攻击，
+            分散在多个 category 多为误杀。
+
+  # ------------------------------------------------------------------ #
+  # P1：可用性与成本
+  # ------------------------------------------------------------------ #
+  - name: reelagent-availability
+    rules:
+      - alert: JobFailureRateHigh
+        expr: |
+          sum(rate(reelagent_jobs_total{status="failed"}[15m]))
+          /
+          clamp_min(sum(rate(reelagent_jobs_total[15m])), 0.001)
+          > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "任务失败率 {{ $value | humanizePercentage }}（阈值 10%）"
+          description: >-
+            先看是否单一供应商：查 reelagent_provider_circuit_open 是否为 1。
+            若某供应商熔断已打开，失败率升高是**预期行为**，不必叫醒人；
+            若所有供应商都正常而失败率仍高，才是自己的 bug。
+
+      - alert: QueueBacklog
+        expr: max(reelagent_job_queue_depth{status="pending"}) > 50
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "任务队列积压 {{ $value }} 条"
+          description: "检查 worker 是否存活（worker_active），以及单任务耗时是否劣化。"
+
+      - alert: NoActiveWorker
+        expr: sum(reelagent_worker_active) == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "没有存活的 worker"
+          description: "任务只进不出。先看 worker 进程是否被 OOM kill。"
+
+      - alert: ProviderCircuitOpen
+        expr: max by (provider, capability) (reelagent_provider_circuit_open) == 1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "供应商 {{ $labels.provider }}/{{ $labels.capability }} 熔断已打开"
+          description: >-
+            熔断打开说明连续失败已达阈值，此时请求已自动降级。
+            确认供应商状态页；恢复后断路器会在冷却期后自动半开试探，无需手工干预。
+
+  # ------------------------------------------------------------------ #
+  # P1：成本与数据生命周期
+  # ------------------------------------------------------------------ #
+  - name: reelagent-cost-and-retention
+    rules:
+      - alert: ProviderCostSpike
+        expr: sum(increase(reelagent_provider_cost_usd_total[1h])) > 20
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "一小时供应商成本 ${{ $value }}（阈值 $20）"
+          description: >-
+            对照 reelagent_jobs_total 判断是「量涨了」还是「单价涨了」。
+            后者通常是路由档位整体上移（premium 占比变高）。
+
+      - alert: GcNotRunning
+        expr: increase(reelagent_artifact_gc_total[6h]) == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "6 小时内没有回收任何产物"
+          description: >-
+            要么真的没有过期产物（正常），要么 GC 任务挂了（会导致存储成本
+            只增不减）。对照 artifact 表里 expires_at < now() 的行数确认。
+
+      - alert: GcDeleteErrors
+        expr: increase(reelagent_artifact_gc_errors_total[1h]) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "产物 GC 删除失败（1 小时内 {{ $value }} 次）"
+          description: "对象删不掉就是成本与合规双重风险，检查存储层权限与网络。"
+
+  # ------------------------------------------------------------------ #
+  # P2：接口质量
+  # ------------------------------------------------------------------ #
+  - name: reelagent-api-quality
+    rules:
+      - alert: HttpErrorRateHigh
+        expr: |
+          sum(rate(reelagent_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(reelagent_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "5xx 比例 {{ $value | humanizePercentage }}"
+          description: "按 route 维度下钻，先排除单个接口的异常。"
+
+      - alert: AuthFailureSpike
+        expr: increase(reelagent_auth_failures_total[10m]) > 50
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "认证失败激增（10 分钟 {{ $value }} 次）"
+          description: "疑似撞库/暴力破解。检查是否集中在单一 IP 或单一账号。"
+
+      - alert: RateLimitHitsHigh
+        expr: increase(reelagent_rate_limit_hits_total[10m]) > 200
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "限流命中频繁（{{ $value }} 次）"
+          description: "可能是有客户在打批量接口，也可能是攻击。看 scope 区分。"
