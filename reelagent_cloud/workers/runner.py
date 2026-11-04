@@ -26,10 +26,15 @@ from ..config import Settings, get_settings
 from ..db.session import dispose_engine, session_scope
 from ..domain.enums import JobKind
 from ..observability import (
+    artifact_gc_errors_total,
+    artifact_gc_freed_bytes_total,
+    artifact_gc_total,
     configure_logging,
     get_logger,
     job_duration,
     jobs_total,
+    ledger_drift_amount,
+    ledger_drift_total,
     worker_active,
     worker_jobs_running,
 )
@@ -46,6 +51,17 @@ JobHandler = Callable[..., Awaitable[Any]]
 REAP_INTERVAL_SECONDS = 120
 #: 邮件投递的轮询间隔
 EMAIL_INTERVAL_SECONDS = 30
+#: 产物 GC 的检查间隔。
+#:
+#: 为什么是 10 分钟而不是 30 秒：GC 要在对象存储上做删除，频率过高只会增加
+#: 存储请求数，并不会让「回款」变快 —— 产物过期是以天为单位的。十分钟一次的
+#: 粒度足够，同时给误删留一个可挽回的窗口。
+GC_INTERVAL_SECONDS = 600
+#: 账本全量巡检的间隔。
+#:
+#: 对账是低频但必须做的事：它查的是「不该发生但发生了的事」（余额漂移），
+#: 快了没有意义，慢了会让漂移持续更久。一小时一次是成本与发现时效的折中。
+RECONCILE_INTERVAL_SECONDS = 3600
 
 
 class Worker:
@@ -65,6 +81,8 @@ class Worker:
         self._cancel_flags: dict[str, asyncio.Event] = {}
         self._last_reap = 0.0
         self._last_email = 0.0
+        self._last_gc = 0.0
+        self._last_reconcile = 0.0
 
     # ------------------------------------------------------------------ #
     async def start(self) -> None:
@@ -268,6 +286,52 @@ class Worker:
                 pipeline_svc.sweep_stale_workspaces(self.settings.engine_workspace)
             except Exception as exc:  # pragma: no cover
                 log.warning("workspace_sweep_error", error=str(exc))
+
+        if now - self._last_gc > GC_INTERVAL_SECONDS:
+            self._last_gc = now
+            # 产物 GC：不回收就等于对象存储只增不减，成本随用量线性上涨。
+            # 失败只记 warning —— GC 挂了不该让任务处理停摆，下一轮会重试。
+            try:
+                from ..services import retention as retention_svc
+
+                async with session_scope() as session:
+                    stats = await retention_svc.gc_expired_artifacts(
+                        session, self.settings, batch=self.settings.retention.gc_batch
+                    )
+                if stats["deleted"]:
+                    artifact_gc_total.labels(kind="all").inc(stats["deleted"])
+                    artifact_gc_freed_bytes_total.inc(stats["freed_bytes"])
+                    if stats["errors"]:
+                        artifact_gc_errors_total.inc(len(stats["errors"]))
+                    log.info(
+                        "artifact_gc",
+                        deleted=stats["deleted"],
+                        freed_bytes=stats["freed_bytes"],
+                        errors=len(stats["errors"]),
+                    )
+            except Exception as exc:  # pragma: no cover
+                log.warning("artifact_gc_failed", error=str(exc))
+
+        if now - self._last_reconcile > RECONCILE_INTERVAL_SECONDS:
+            self._last_reconcile = now
+            # 账本全量巡检：日常接口看不出漂移，只有定时全量对账才发现得了。
+            # 发现漂移必须打指标 + 错误日志（告警规则挂在这个指标上）。
+            try:
+                from ..services import credits as credits_svc
+
+                async with session_scope() as session:
+                    report = await credits_svc.reconcile_all_orgs(session)
+                if report["drifted_count"]:
+                    ledger_drift_total.inc(report["drifted_count"])
+                    ledger_drift_amount.set(report["max_abs_drift"])
+                    log.error(
+                        "ledger_drift_detected",
+                        drifted=report["drifted_count"],
+                        max_abs_drift=report["max_abs_drift"],
+                        sample=report["drifts"][:5],
+                    )
+            except Exception as exc:  # pragma: no cover
+                log.warning("reconcile_all_failed", error=str(exc))
 
         if self.settings.email.enabled and now - self._last_email > EMAIL_INTERVAL_SECONDS:
             self._last_email = now

@@ -139,6 +139,48 @@ worker_jobs_running = Gauge(
 )
 
 # --------------------------------------------------------------------------- #
+# 资金完整性 / 数据生命周期 / 内容安全
+#
+# 这三个域的共同点是「出问题时不会报错，只会安静地错」：
+#   - 账本漂移：余额与账本对不上，但接口全部 200
+#   - GC 停摆：对象存储只增不减，直到账单来了才发现
+#   - 审核拦截：拦掉了却没有指标，等于没人知道内容策略真的在生效
+# 因此都必须有指标 + 告警，而不是只写日志。
+# --------------------------------------------------------------------------- #
+ledger_drift_total = Counter(
+    "reelagent_ledger_drift_total",
+    "对账发现账本与余额不一致的机构次数（>0 即 P0）",
+    registry=REGISTRY,
+)
+ledger_drift_amount = Gauge(
+    "reelagent_ledger_drift_amount",
+    "最近一次对账中单个机构的最大漂移额度",
+    registry=REGISTRY,
+)
+artifact_gc_total = Counter(
+    "reelagent_artifact_gc_total",
+    "产物 GC 回收数量",
+    ["kind"],
+    registry=REGISTRY,
+)
+artifact_gc_freed_bytes_total = Counter(
+    "reelagent_artifact_gc_freed_bytes_total",
+    "产物 GC 释放的字节数",
+    registry=REGISTRY,
+)
+artifact_gc_errors_total = Counter(
+    "reelagent_artifact_gc_errors_total",
+    "产物 GC 删除失败次数（对象残留 = 成本与合规双重风险）",
+    registry=REGISTRY,
+)
+moderation_blocked_total = Counter(
+    "reelagent_moderation_blocked_total",
+    "内容审核拦截次数",
+    ["scope", "category"],
+    registry=REGISTRY,
+)
+
+# --------------------------------------------------------------------------- #
 # 安全
 # --------------------------------------------------------------------------- #
 auth_failures_total = Counter(

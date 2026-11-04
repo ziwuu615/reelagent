@@ -110,6 +110,57 @@ async def reconcile(session: AsyncSession, org_id: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# 全量巡检
+# --------------------------------------------------------------------------- #
+async def reconcile_all_orgs(session: AsyncSession, *, limit: int = 1000) -> dict[str, Any]:
+    """巡检所有机构的账本一致性，只返回**不一致**的。
+
+    ## 为什么要全量巡检，而不是等用户调 reconcile
+
+    `reconcile(org_id)` 是「查一个」，靠人触发。账本类 bug 的典型表现恰恰是
+    「日常接口全部 200，余额在没人操作的情况下慢慢偏了」——没有人会主动去查，
+    所以必须定时全量扫。
+
+    ## 为什么用一条 SQL 而不是逐机构循环
+
+    逐机构查是 N+1：1000 个机构就是 1001 次查询，且每次都要拉起事务。
+    这里用 LEFT JOIN + HAVING 让数据库一次算完，只把**漂移的行**带回来。
+    对账是低频任务，但它跑的时候不该把数据库拖住。
+
+    返回值刻意设计成「只包含异常机构」：正常时返回空列表，
+    告警规则就能直接写 `count > 0`，不需要在告警里再过滤。
+    """
+    balance = Organization.credits_balance
+    ledger_sum = func.coalesce(func.sum(LedgerEntry.amount), 0)
+
+    stmt = (
+        select(Organization.id, balance, ledger_sum)
+        .select_from(Organization)
+        .outerjoin(LedgerEntry, LedgerEntry.org_id == Organization.id)
+        .group_by(Organization.id, balance)
+        .having(balance != ledger_sum)
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+
+    drifts = [
+        {
+            "org_id": row[0],
+            "balance": int(row[1] or 0),
+            "ledger_sum": int(row[2] or 0),
+            "drift": int(row[1] or 0) - int(row[2] or 0),
+        }
+        for row in rows
+    ]
+    return {
+        "checked_limit": limit,
+        "drifted_count": len(drifts),
+        "max_abs_drift": max((abs(d["drift"]) for d in drifts), default=0),
+        "drifts": drifts,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # 写入
 # --------------------------------------------------------------------------- #
 

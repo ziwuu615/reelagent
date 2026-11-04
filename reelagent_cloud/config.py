@@ -188,6 +188,32 @@ class BillingSettings(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# 产物保留期（GC）
+# --------------------------------------------------------------------------- #
+class RetentionSettings(BaseModel):
+    """各类产物的保留天数。
+
+    `0` 表示**不回收**（关闭该类产物的 TTL），不是「立刻删」。
+    保留期设成 0 立刻清空线上产物是最典型的误配事故，这里刻意让语义偏保守。
+
+    默认值遵循「交付物留久、中间产物留短」：
+    成片 30 天（用户要下载/分享），镜头片段与关键帧 7 天（可由基准图重建）。
+    """
+
+    final_video_days: int = 30
+    gif_days: int = 30
+    audio_days: int = 30
+    storyboard_days: int = 30
+    manifest_days: int = 30
+    report_days: int = 30
+    video_days: int = 7
+    keyframe_days: int = 7
+    base_image_days: int = 30
+    #: 单轮 GC 最多处理的产物数，防止一次清理把数据库拖住
+    gc_batch: int = 200
+
+
+# --------------------------------------------------------------------------- #
 # 供应商（扁平命名，兼容引擎层既有 .env）
 # --------------------------------------------------------------------------- #
 class ProviderSettings(BaseModel):
@@ -275,6 +301,7 @@ class Settings(BaseSettings):
     observability: ObservabilitySettings = ObservabilitySettings()
     billing: BillingSettings = BillingSettings()
     providers: ProvidersSettings = ProvidersSettings()
+    retention: RetentionSettings = RetentionSettings()
 
     # ---- 引擎参数 ----
     style: str = "cinematic"

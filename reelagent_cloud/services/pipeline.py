@@ -586,6 +586,13 @@ async def _collect_artifacts(
             total_bytes += int(stored.size_bytes or 0)
 
     if rows:
+        # 统一的 TTL 打点：所有产物都从这里拿保留期，避免出现
+        # 「有的类型设了 TTL、有的忘了设，于是永远不回收」的漏网。
+        from . import retention as retention_svc
+
+        for row in rows:
+            row.expires_at = retention_svc.expires_at_for(row.kind, settings=settings)
+
         async with session_scope() as session:
             # 同一 job 重跑时先清掉旧登记，避免产物重复累积
             existing = list(
