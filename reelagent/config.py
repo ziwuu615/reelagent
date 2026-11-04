@@ -120,6 +120,24 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+#: 被当成 True 的取值。故意**只**认这些明确的写法：
+#: 布尔配置写错时应当回落到默认值，而不是「非空字符串就算 True」——
+#: 后者会让 `REEL_MODERATION_ENABLED=false` 静默变成开启（或反之），
+#: 而对本条配置来说，猜错的代价是放出一条违规内容。
+_TRUE_VALUES = {"1", "true", "yes", "on", "y", "t"}
+_FALSE_VALUES = {"0", "false", "no", "off", "n", "f", ""}
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = _env(key, "").strip().lower()
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        # 空字符串代表「没配置」，必须回落到默认值而不是当成 False
+        return default if raw == "" else False
+    return default
+
+
 # --------------------------------------------------------------------------- #
 # 风格预设
 # --------------------------------------------------------------------------- #
@@ -199,6 +217,26 @@ class Settings:
     max_repair_rounds: int = 2
     ffmpeg: str | None = None
 
+    #: ---- 合规：AIGC 标识 ----
+    #: 《人工智能生成合成内容标识办法》2025-09-01 施行，要求显式 + 隐式标识。
+    #: 默认开启：对外提供生成式服务时，没有标识是违规的，默认关闭等于默认违规。
+    aigc_label: bool = True
+    aigc_label_text: str = "AI 生成"
+
+    #: ---- 合规：内容安全审核 ----
+    #: 审核 provider 不可用时的策略。True = 拒绝生成（合规优先），
+    #: False = 放行（可用性优先）。对外服务应保持 True。
+    moderation_fail_closed: bool = True
+    moderation_enabled: bool = True
+    #: 外挂词库文件（每行 `分类:词1,词2`）。为空则只用内置示意词表。
+    moderation_blocklist_file: str = ""
+
+    #: ---- 供应商熔断 ----
+    #: 连续失败多少次后打开断路器（打开后不再尝试该供应商，直接走降级）。
+    breaker_threshold: int = 5
+    #: 冷却多少秒后允许一个探针试通。
+    breaker_reset_seconds: float = 60.0
+
     llm: ProviderConfig = field(default_factory=lambda: ProviderConfig(name="llm", model=""))
     llm_judge_model: str = ""
     image: ProviderConfig = field(default_factory=lambda: ProviderConfig(name="image", model=""))
@@ -230,6 +268,13 @@ class Settings:
             max_attempts=_env_int("REEL_MAX_ATTEMPTS", 3),
             max_repair_rounds=_env_int("REEL_MAX_REPAIR_ROUNDS", 2),
             ffmpeg=ffmpeg,
+            aigc_label=_env_bool("REEL_AIGC_LABEL", True),
+            aigc_label_text=_env("REEL_AIGC_LABEL_TEXT", "AI 生成"),
+            moderation_enabled=_env_bool("REEL_MODERATION_ENABLED", True),
+            moderation_fail_closed=_env_bool("REEL_MODERATION_FAIL_CLOSED", True),
+            moderation_blocklist_file=_env("REEL_MODERATION_BLOCKLIST_FILE", ""),
+            breaker_threshold=_env_int("REEL_BREAKER_THRESHOLD", 5),
+            breaker_reset_seconds=_env_float("REEL_BREAKER_RESET_SECONDS", 60.0),
             llm=ProviderConfig(
                 name="llm",
                 model=_env_any("REEL_LLM_MODEL", "REEL_PROVIDERS__LLM__MODEL", default="deepseek-chat"),

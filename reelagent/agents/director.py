@@ -16,10 +16,12 @@ from __future__ import annotations
 import concurrent.futures as cf
 import contextlib
 import threading
+from pathlib import Path
 from typing import Any
 
 from ..harness import RetryPolicy, run_with_retry
 from ..llm import prompts
+from ..moderation import ModerationError
 from ..routing import ModelRouter
 from ..schema import (
     SHOT_AUDIO_DONE,
@@ -45,6 +47,9 @@ class Director(Agent):
         super().__init__(rt)
         self.verbose = verbose
         self.router = ModelRouter(rt.settings, spent_usd=rt.spent_usd)
+        #: 被内容审核拦下的镜头。用它决定「整条任务失败」而不是「这镜跳过」。
+        self._blocked: list[str] = []
+        self._blocked_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     def run(
@@ -87,6 +92,7 @@ class Director(Agent):
 
         first_shot_id = shots[0].id if shots else ""
 
+        self._blocked = []
         with cf.ThreadPoolExecutor(max_workers=max(1, self.rt.settings.max_concurrency)) as pool:
             futures = {
                 pool.submit(
@@ -98,11 +104,25 @@ class Director(Agent):
                 shot = futures[fut]
                 try:
                     fut.result()
+                except ModerationError as exc:
+                    # 内容审核拦截是**不可修复**的失败：同一段文字重跑仍然会被拦。
+                    # 因此不按「单镜失败继续跑」处理，而是收集起来让整条任务失败。
+                    shot.status = SHOT_FAILED
+                    shot.error = f"{type(exc).__name__}: {exc}"[:500]
+                    self.rt.store.save_shot(project.id, shot)
+                    with self._blocked_lock:
+                        self._blocked.append(shot.id)
+                    self._log(f"镜头 {shot.id} 被内容审核拦截：{exc}")
                 except Exception as exc:  # 单镜失败不拖垮整条流水线
                     shot.status = SHOT_FAILED
                     shot.error = f"{type(exc).__name__}: {exc}"[:500]
                     self.rt.store.save_shot(project.id, shot)
                     self._log(f"镜头 {shot.id} 失败：{shot.error}")
+
+        if self._blocked:
+            # 有镜头被审核拦下时，交付一条缺镜头的成片比直接失败更糟：
+            # 用户看到的是「成片少了一段」而不是「内容不合规」，会反复重试。
+            raise ModerationError(f"内容安全审核未通过，已终止生成：{', '.join(sorted(self._blocked))}")
 
         self.rt.store.save_project(project)
         summary = {
@@ -203,6 +223,10 @@ class Director(Agent):
             if not shot.image_prompt or not shot.video_prompt:
                 self._build_prompts(shot, bound_clues, project)
 
+            # ---- 1.5 内容审核（提示词进模型前）----
+            self._guard_text(shot, shot.image_prompt, scope="image_prompt")
+            self._guard_text(shot, shot.video_prompt, scope="video_prompt")
+
             # ---- 2. 关键帧（带基准图参考）----
             if not shot.keyframe_path:
                 refs = [c.base_image for c in bound_clues if c.base_image]
@@ -225,6 +249,9 @@ class Director(Agent):
                     name="director.keyframe",
                     attrs={"shot_id": shot.id, "refs": len(refs)},
                 )
+                # 先审图再登记路径：审核不通过时不把违规图写进 shot，
+                # 避免恢复逻辑把它当成「已完成的关键帧」继续复用。
+                self._guard_image(shot, self.rt.settings.workspace / result["path"])
                 shot.keyframe_path = result["path"]
                 shot.provider_used = result["provider"]
                 shot.model_used = result["model"]
@@ -246,36 +273,55 @@ class Director(Agent):
                     # 注意它只对**视频**生效 —— 关键帧仍用基础图像模型。
                     "use_fast": decision.use_fast_model,
                 }
-                try:
-                    result = run_with_retry(
-                        lambda: self.rt.tools.call(
-                            "generate_clip",
-                            {**clip_args, "use_video_model": decision.use_video_model},
-                        ),
-                        policy=RetryPolicy(attempts=self.rt.settings.max_attempts),
-                        tracer=self.rt.tracer,
-                        name="director.clip",
-                        attrs={"shot_id": shot.id, "tier": decision.tier},
-                    )
-                except Exception as exc:
-                    # 视频模型故障（限流、超时、额度耗尽）时降级为本地运动合成。
-                    #
-                    # 为什么降级而不是让镜头失败：单个供应商的瞬时抖动不该让
-                    # 用户的成片开天窗。草稿档的本地合成零成本、必然成功，
-                    # 成片仍可交付。
-                    #
-                    # 降级是**执行期事件**，所以记入链路追踪而不是 Shot 字段：
-                    # Shot 表达的是产物状态，而「这次为什么没用上视频模型」
-                    # 属于过程信息，两者的生命周期与用途不同。
-                    if not decision.use_video_model:
-                        raise  # 本来就走本地合成还失败，那是真故障
+                breaker_key = f"{self.rt.settings.video.name or 'video'}:clip"
+                result = None
+                if decision.use_video_model and not self.rt.breakers.guard(breaker_key):
+                    # 断路器已打开：不再重试、不再等超时，直接走本地合成。
+                    # 这是熔断的全部意义 —— 供应商整体故障时，把
+                    # 「每镜 3 次重试 × 超时」的分钟级白等压到毫秒级。
                     self.rt.tracer.record(
-                        "director.clip.degraded_to_local",
+                        "director.clip.short_circuited",
                         status="degraded",
                         shot_id=shot.id,
-                        reason=f"{type(exc).__name__}: {str(exc)[:200]}",
-                        tier=decision.tier,
+                        breaker=breaker_key,
                     )
+                else:
+                    try:
+                        result = run_with_retry(
+                            lambda: self.rt.tools.call(
+                                "generate_clip",
+                                {**clip_args, "use_video_model": decision.use_video_model},
+                            ),
+                            policy=RetryPolicy(attempts=self.rt.settings.max_attempts),
+                            tracer=self.rt.tracer,
+                            name="director.clip",
+                            attrs={"shot_id": shot.id, "tier": decision.tier},
+                        )
+                        if decision.use_video_model:
+                            self.rt.breakers.breaker.record_success(breaker_key)
+                    except Exception as exc:
+                        # 视频模型故障（限流、超时、额度耗尽）时降级为本地运动合成。
+                        #
+                        # 为什么降级而不是让镜头失败：单个供应商的瞬时抖动不该让
+                        # 用户的成片开天窗。草稿档的本地合成零成本、必然成功，
+                        # 成片仍可交付。
+                        #
+                        # 降级是**执行期事件**，所以记入链路追踪而不是 Shot 字段：
+                        # Shot 表达的是产物状态，而「这次为什么没用上视频模型」
+                        # 属于过程信息，两者的生命周期与用途不同。
+                        if not decision.use_video_model:
+                            raise  # 本来就走本地合成还失败，那是真故障
+                        opened = self.rt.breakers.breaker.record_failure(breaker_key)
+                        self.rt.tracer.record(
+                            "director.clip.degraded_to_local",
+                            status="degraded",
+                            shot_id=shot.id,
+                            reason=f"{type(exc).__name__}: {str(exc)[:200]}",
+                            tier=decision.tier,
+                            breaker_opened=opened,
+                        )
+
+                if result is None:
                     result = run_with_retry(
                         lambda: self.rt.tools.call("generate_clip", {**clip_args, "use_video_model": False}),
                         policy=RetryPolicy(attempts=self.rt.settings.max_attempts),
@@ -298,6 +344,8 @@ class Director(Agent):
             # 这里改为「尽力而为」：失败就跳过音频、记录降级，继续走完渲染。
             speech = shot.dialogue or shot.narration
             if speech and not shot.audio_path:
+                # 台词/旁白会变成可听内容，同样要过审核
+                self._guard_text(shot, speech, scope="speech")
                 try:
                     result = run_with_retry(
                         lambda: self.rt.tools.call(
@@ -415,6 +463,49 @@ class Director(Agent):
         )
         suffix = "；".join(missing)
         return f"{prompt}；{suffix}" if prompt else suffix
+
+    # ------------------------------------------------------------------ #
+    # 内容安全审核
+    # ------------------------------------------------------------------ #
+    def _guard_text(self, shot: Shot, text: str, *, scope: str) -> None:
+        """送进生成模型之前的文本审核。
+
+        为什么不放在 Planner 之后统一审：画面提示词是**逐镜拼**出来的，
+        Planner 阶段还不存在。只有审在这里，才能保证「真正送给图像/视频模型的
+        那个字符串」被看过 —— 审一个中间产物等于没审。
+        """
+        if not text or not text.strip():
+            return
+        verdict = self.rt.moderation.check_text(text, scope=f"{scope}:{shot.id}")
+        self.rt.tracer.record(
+            "moderation.text",
+            status="ok" if verdict.allowed else "blocked",
+            shot_id=shot.id,
+            scope=scope,
+            categories=list(verdict.categories),
+            action=verdict.action,
+        )
+        if not verdict.allowed:
+            raise ModerationError(f"{verdict.reason}（{scope}）")
+
+    def _guard_image(self, shot: Shot, path: Path) -> None:
+        """关键帧出图后的审核。
+
+        被拦下的图必须**从磁盘删掉**：如果留在工作区，断点恢复会认为
+        「关键帧已完成」而跳过重生成，等于把违规图留在后续重跑里。
+        """
+        verdict = self.rt.moderation.check_image(path, scope=f"keyframe:{shot.id}")
+        self.rt.tracer.record(
+            "moderation.image",
+            status="ok" if verdict.allowed else "blocked",
+            shot_id=shot.id,
+            categories=list(verdict.categories),
+            action=verdict.action,
+        )
+        if not verdict.allowed:
+            with contextlib.suppress(Exception):
+                path.unlink(missing_ok=True)
+            raise ModerationError(f"{verdict.reason}（关键帧 {shot.id}）")
 
     # ------------------------------------------------------------------ #
     def _log(self, msg: str) -> None:

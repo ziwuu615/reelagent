@@ -20,6 +20,7 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from ..schema import Project, Shot
+from .watermark import AigcLabel, apply_aigc_label
 
 
 class RenderError(RuntimeError):
@@ -445,6 +446,31 @@ def compose(project: Project, settings, *, out_dir: Path | None = None) -> dict[
             project.final_gif = settings.rel(gif)
             result["gif"] = project.final_gif
 
+    # ------------------------------------------------------------------ #
+    # AIGC 显式 + 隐式标识
+    #
+    # 放在最后一步、对所有后端统一生效（MP4 与 GIF 都过一遍），这样以后
+    # 新增合成后端不会漏掉标识。显式标识烧进画面，隐式标识同时进容器
+    # 元数据与 manifest。标识失败不阻断交付，但必须留下 warning。
+    # ------------------------------------------------------------------ #
+    aigc_meta: dict[str, str] = {}
+    if getattr(settings, "aigc_label", True):
+        artifact: Path | None = None
+        if project.final_video:
+            artifact = out_dir / "final.mp4"
+        elif project.final_gif:
+            artifact = out_dir / "final.gif"
+        if artifact is not None and artifact.exists():
+            _, aigc_meta = apply_aigc_label(
+                ffmpeg=settings.ffmpeg,
+                artifact=artifact,
+                out_dir=out_dir,
+                label=AigcLabel(text=getattr(settings, "aigc_label_text", "AI 生成")),
+            )
+            if aigc_meta.get("error"):
+                result["warnings"].append(f"AIGC 标识未完成：{aigc_meta['error']}")
+            result["aigc"] = aigc_meta
+
     # manifest
     manifest = {
         "project_id": project.id,
@@ -453,6 +479,7 @@ def compose(project: Project, settings, *, out_dir: Path | None = None) -> dict[
         "style": project.style,
         "aspect_ratio": project.aspect_ratio,
         "total_duration_s": project.script.total_duration_s,
+        "aigc": aigc_meta or {"AIGC": "true", "AIGC-Provider": "ReelAgent"},
         "shots": [
             {
                 "id": s.id,

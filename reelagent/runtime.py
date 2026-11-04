@@ -70,6 +70,24 @@ class Runtime:
 
         register_media_tools(self)
 
+        #: 内容安全审核。放在 Runtime 上而不是每个 Agent 各建一个：
+        #: 审核要共享同一份词库与同一套 fail 策略，否则两个 Agent 对
+        #: 「这条内容算不算违规」可能给出不同答案。
+        from .moderation import build_moderation
+
+        self.moderation = build_moderation(settings)
+
+        #: 供应商熔断器。按 `provider:capability` 分开计数：
+        #: 视频挂了不该把图像也停掉。
+        from .harness.breaker import BreakerTracker, CircuitBreaker
+
+        self.breakers = BreakerTracker(
+            breaker=CircuitBreaker(
+                threshold=getattr(settings, "breaker_threshold", 5),
+                reset_seconds=getattr(settings, "breaker_reset_seconds", 60.0),
+            )
+        )
+
         self.usage = Usage()
 
     # ------------------------------------------------------------------ #
