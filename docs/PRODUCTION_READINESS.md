@@ -19,14 +19,14 @@
 | AIGC 显式标识（画面水印） | ✅ 已就绪 | `reelagent/render/watermark.py`，`composer.compose()` 末尾统一烤入 | `tests/test_aigc_label.py` |
 | AIGC 隐式标识（元数据） | ✅ 已就绪 | 同上，写进 `manifest.json` 的 `aigc` 块；MP4 走 ffmpeg 容器元数据 | 同上 |
 | 输入内容审核（提示词） | ✅ 已就绪 | `reelagent/moderation.py`；`Director._guard_text` 在进模型前审 | `tests/test_moderation.py`、`tests/test_director_moderation.py` |
-| 输出内容审核（关键帧） | ⚠️ 结构化就绪 | 同上 `Director._guard_image`；**当前 provider 是启发式**（纯色/过小/不可解码），语义级审核需接云端内容安全 | 同上 |
+| 输出内容审核（关键帧） | ✅ 已就绪 | `DashScopeVisionModeration`（多模态语义审核）+ 启发式兜底；生产环境强制要求语义审核，配 `REEL_COMPLIANCE__IMAGE_MODERATION=heuristic` 会**启动失败** | `test_vision_moderation.py`(12)、`test_compliance_gate.py`(4) |
 | 审核失败策略 fail-closed | ✅ 已就绪 | `Settings.moderation_fail_closed`，默认 True | `test_moderation.py::TestFailPolicy` |
 | 违规内容不交付 | ✅ 已就绪 | 任一镜头被拦 → 整条任务失败（而非跳过该镜），避免交付缺镜头的片子 | `Director.run()` 的 `_blocked` 分支 |
 | 产物 TTL 与 GC | ✅ 已就绪 | `reelagent_cloud/services/retention.py`；worker 每 10 分钟回收 | `tests/test_retention.py` |
 | 账本漂移巡检 | ✅ 已就绪 | `credits.reconcile_all_orgs()`；worker 每小时全量巡检并打指标 | `tests/test_reconcile_all.py` |
 | 账本漂移告警 | ✅ 已就绪 | `deploy/monitoring/prometheus-rules.yml::LedgerDriftDetected`（P0，无 `for` 抑制） | `promtool check rules` |
 | 对账差异工单 | ✅ 已就绪 | `reconciliation_diffs` 表 + `credits.record_diffs`：持续漂移去重累加、金额变化另起一行、漂移消失自动关闭；迁移 `0003` | `tests/test_reconciliation_diffs.py`（5 项） |
-| 生成式 AI 双备案 | ⏳ 材料就绪 / 流程待办 | 备案所需的《内容安全机制说明》与《应急处置预案》已成稿：`docs/compliance/`；仍需法务提交 | 法务 / 网信办 |
+| 生成式 AI 双备案 | ⏳ 材料齐备 / 待法务提交 | 材料清单与仓库对应关系见 `docs/compliance/filing-checklist.md`；仍需法务提交 | 法务 / 网信办 |
 
 ### P1：上线首月必须完成
 
@@ -47,7 +47,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | 图像语义审核接入云端 | ❌ | 替换 `HeuristicImageModeration` 即可，调用方不用改 |
-| 日志留存 ≥ 6 个月 | ⏳ 政策已定 | 留存矩阵见 `docs/compliance/data-retention.md`；应用日志的执行依赖部署侧日志平台配置 |
+| 日志留存 ≥ 6 个月 | ✅ 已就绪 | `log_sink=file/both` 按天轮转保留 180 天；prod 必须落盘或显式声明外部留存，否则启动失败 | `test_log_retention.py`(10) |
 | 用户实名（手机号） | ❌ | 生成式 AI 服务需真实身份信息认证 |
 | 月度账单 / 发票 | ❌ | 现有页内用量，无账单 PDF |
 | 灰度发布与回滚 | ❌ | CI 有（`.github/workflows/`），缺流量切分 |
@@ -109,7 +109,7 @@ LEFT JOIN + HAVING 让数据库一次算完，只把漂移的行带回来。
 
 ## 六、还没做的事，以及我为什么如实写出来
 
-当前仍未完成：用户实名认证、图像语义审核接入云端、月度账单/发票、灰度发布、等保、2FA。
+当前仍未完成：用户实名认证、月度账单/发票、灰度发布、等保、2FA。图像语义审核与日志留存已从「缺口」转为「已就绪」。
 它们都不难，但都属于「要么有、要么没有」的合规/资金能力 —— 做一半比不做更危险，
 因为会让人误以为已经受控。
 

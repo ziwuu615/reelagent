@@ -81,13 +81,26 @@ def configure_logging(
     fmt: str = "json",
     service: str = "reelagent",
     version: str = "1.0.0",
+    log_file: str = "",
+    retention_days: int = 180,
+    sink: str = "stdout",
 ) -> None:
     """把 structlog 与标准库 logging 打通。
 
     为什么不用 PrintLoggerFactory：那样 uvicorn / SQLAlchemy / httpx 的日志
     会绕过我们的处理器，既不统一格式也**不做密钥脱敏**。
     走 `ProcessorFormatter` 后，第三方库的日志同样经过脱敏链。
+
+    ## 日志留存
+
+    `sink=file|both` 时额外挂一个按天轮转的文件处理器，保留 `retention_days` 天。
+    这是「不依赖外部日志平台也能证明留存」的那条路径 —— 网络安全法要求
+    日志留存不低于 6 个月，只用 stdout 时这个要求完全靠平台兑现，应用侧无法自证。
+
+    为什么用 `TimedRotatingFileHandler` 而不是自己写轮转：它的 `backupCount`
+    语义正好是「保留多少份归档」，按天切分即「保留多少天」，不需要额外记账。
     """
+
     global _configured
 
     shared: list[Any] = [
@@ -122,13 +135,41 @@ def configure_logging(
         ],
     )
 
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(formatter)
-
     root = logging.getLogger()
     for existing in list(root.handlers):
         root.removeHandler(existing)
-    root.addHandler(handler)
+
+    sink = (sink or "stdout").lower()
+    if sink in {"stdout", "both"}:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+
+    if sink in {"file", "both"}:
+        if not log_file:
+            # 配置层已经拦过（生产校验器），这里只是防御：宁可只输出 stdout，
+            # 也不要因为路径没配而让进程起不来。
+            logging.getLogger(__name__).warning("log_sink=%s 但 log_file 为空，仅使用 stdout", sink)
+            if sink == "file":
+                handler = logging.StreamHandler(sys.stderr)
+                handler.setFormatter(formatter)
+                root.addHandler(handler)
+        else:
+            import os
+            from logging.handlers import TimedRotatingFileHandler
+
+            directory = os.path.dirname(log_file)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            file_handler = TimedRotatingFileHandler(
+                log_file,
+                when="midnight",
+                backupCount=max(1, int(retention_days)),
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+
     root.setLevel(logging.getLevelNamesMapping().get(level.upper(), logging.INFO))
 
     # 第三方库降噪：这些库在 INFO 级别会淹没业务日志

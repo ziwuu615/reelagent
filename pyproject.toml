@@ -141,6 +141,7 @@ ignore = [
 # URL 来自运维配置而非用户输入，S310（URL scheme 审计）在此不适用。
 "reelagent/providers/*" = ["S310"]
 "reelagent/llm/openai_compat.py" = ["S310"]
+"reelagent/moderation.py" = ["S310"]
 "reelagent_cloud/db/migrations/versions/*" = ["E", "F", "I", "N", "UP", "SIM", "B", "W"]
 "scripts/*" = ["S", "T201"]
 

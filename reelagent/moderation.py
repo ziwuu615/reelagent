@@ -39,6 +39,7 @@ Planner 编剧本、Director 拼画面提示词、Evaluator 写评审意见。�
 
 from __future__ import annotations
 
+import contextlib
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -286,6 +287,173 @@ class HeuristicImageModeration:
 
 
 # --------------------------------------------------------------------------- #
+# 多模态语义审核（真实内容审核）
+# --------------------------------------------------------------------------- #
+#: 审核用的提示词。要求模型只输出 JSON，并且**默认倾向于拦截**：
+#: 审核模型的错误成本不对称 —— 多拦一张只是重生成，漏放一张是合规事故。
+_VISION_SYSTEM = (
+    "你是内容安全审核员。判断给定图片是否适合作为公开传播的短视频画面。"
+    "只要画面可能涉及色情低俗、暴力血腥、违禁品、赌博诈骗、自伤自杀、"
+    "未成年人不当内容、政治敏感，就必须判定为不通过。\n"
+    "只输出 JSON，不要任何解释或 markdown。结构：\n"
+    '{"allowed": true|false, "categories": ["命中的类别"], "reason": "一句话理由"}'
+)
+
+
+@dataclass
+class DashScopeVisionModeration:
+    """调用多模态模型做语义级图像审核。
+
+    ## 为什么不用云端内容安全产品而用多模态模型
+
+    云端内容安全（如阿里云内容安全 Green）通常要主账号 AccessKey + 单独的
+    签名实现；而本项目已经持有 DashScope 的 API Key，多模态模型走同一套
+    OpenAI 兼容接口即可，**不引入新凭证与新依赖**。
+
+    代价要说清楚：模型审核是概率性的，不如专用审核产品稳定，且每次调用有
+    token 成本。所以它适合「上线初期没有审核产品额度」的阶段，
+    规模上来后应当替换为专用服务 —— 替换点就是 `ImageModerationProvider` 协议。
+
+    ## 三件必要的工程处理
+
+    1. **缩放**：审核不需要原图精度，长边压到 768 像素，token 成本降一个量级
+    2. **缓存**：同一张图（sha256 相同）在一次进程内只审一次 ——
+       断点重跑会把同一批关键帧再审一遍，纯浪费
+    3. **失败即不可用**：解析不出结论时返回 unavailable，
+       由上层按 fail-closed 处理，绝不猜成「通过」
+    """
+
+    api_key: str
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: str = "qwen-vl-plus"
+    timeout: float = 30.0
+    max_side: int = 768
+    name: str = "dashscope-vision"
+    #: 进程内缓存：sha256 -> 结论。上限直接清空而不是 LRU ——
+    #: 审核结论很小，清空的代价远低于维护 LRU 的复杂度。
+    _cache: dict[str, ModerationVerdict] = field(default_factory=dict)
+    _cache_max: int = 512
+
+    def _encode(self, path: Path) -> tuple[str, str]:
+        """返回 (data URI, sha256)。缩放后转 JPEG 以压缩传输体积。"""
+        import base64
+        import hashlib
+        import io
+
+        from PIL import Image
+
+        raw = path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        with Image.open(io.BytesIO(raw)) as im:
+            rgb = im.convert("RGB")
+            w, h = rgb.size
+            scale = min(1.0, self.max_side / max(w, h))
+            if scale < 1.0:
+                rgb = rgb.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+            buf = io.BytesIO()
+            rgb.save(buf, format="JPEG", quality=82)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}", digest
+
+    def check(self, path: Path, *, scope: str = "") -> ModerationVerdict:
+        if not path.exists():
+            return ModerationVerdict.unavailable(self.name, f"文件不存在：{path.name}")
+
+        try:
+            data_uri, digest = self._encode(path)
+        except Exception as exc:
+            return ModerationVerdict.unavailable(self.name, f"{type(exc).__name__}: {exc}")
+
+        cached = self._cache.get(digest)
+        if cached is not None:
+            return cached
+
+        try:
+            verdict = self._call(data_uri, scope=scope)
+        except Exception as exc:
+            # 网络/限流/超时：不缓存失败结果，下次要能重试
+            return ModerationVerdict.unavailable(self.name, f"{type(exc).__name__}: {exc}")
+
+        if len(self._cache) >= self._cache_max:
+            self._cache.clear()
+        self._cache[digest] = verdict
+        return verdict
+
+    def _call(self, data_uri: str, *, scope: str = "") -> ModerationVerdict:
+        import json
+        import urllib.error
+        import urllib.request
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _VISION_SYSTEM},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                        {"type": "text", "text": "请审核这张图片，只输出 JSON。"},
+                    ],
+                },
+            ],
+            "temperature": 0.0,
+        }
+        req = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+
+        content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        data = _extract_json(content)
+        if data is None:
+            return ModerationVerdict.unavailable(self.name, f"审核结果无法解析：{content[:120]}")
+
+        allowed = bool(data.get("allowed", False))
+        categories = [str(c)[:32] for c in (data.get("categories") or [])][:8]
+        reason = str(data.get("reason") or "")[:200]
+
+        if allowed and not categories:
+            return ModerationVerdict.ok(self.name)
+        return ModerationVerdict.blocked(
+            self.name,
+            categories=categories or ["未分类"],
+            matched=[scope] if scope else [],
+            reason=reason or "多模态审核判定不通过",
+        )
+
+
+def _extract_json(text: str) -> dict[str, Any] | None:
+    """从模型输出里抠出 JSON。
+
+    不能直接 `json.loads`：模型经常包一层 ```json 代码块，或者在前后加一句解释。
+    先按代码块拆，再退化到「找第一个 { 到最后一个 }」。
+    """
+    import json
+
+    cleaned = (text or "").strip()
+    if "```" in cleaned:
+        parts = cleaned.split("```")
+        if len(parts) >= 2:
+            cleaned = parts[1].removeprefix("json").strip()
+    with contextlib.suppress(Exception):
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return data
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(cleaned[start : end + 1])
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # 装配
 # --------------------------------------------------------------------------- #
 class BlockingModerationFactory:
@@ -326,13 +494,43 @@ class BlockingModerationFactory:
 def build_moderation(settings) -> BlockingModerationFactory:
     """按配置装配审核器。
 
-    词库文件加载失败时**降级到内置词表并继续**，而不是让整个流水线起不来：
-    审核能力变弱是可观测、可告警的问题；服务起不来是事故。
+    两处刻意的降级策略：
+
+    1. **词库文件写坏 -> 用内置词表继续**。审核能力变弱是可观测、可告警的问题；
+       服务起不来是事故。
+    2. **要求语义审核但没配 Key -> 退回启发式并留 warning**。不能因为
+       「本想要更强的审核」而让整条流水线起不来；但也不能静默退回 ——
+       退回意味着审核能力比预期弱，必须让运维看见。
     """
     extra = load_blocklist(getattr(settings, "moderation_blocklist_file", ""))
+
+    mode = str(getattr(settings, "image_moderation", "heuristic") or "heuristic").lower()
+    image_provider: ImageModerationProvider = HeuristicImageModeration()
+    note = ""
+
+    if mode == "dashscope":
+        llm = getattr(settings, "llm", None)
+        api_key = getattr(llm, "api_key", "") if llm is not None else ""
+        if api_key:
+            image_provider = DashScopeVisionModeration(
+                api_key=api_key,
+                base_url=getattr(llm, "base_url", "") or DashScopeVisionModeration.base_url,
+                model=str(getattr(settings, "image_moderation_model", "") or "qwen-vl-plus"),
+                timeout=float(getattr(settings, "image_moderation_timeout", 30.0) or 30.0),
+            )
+        else:
+            note = "image_moderation=dashscope 但未配置 LLM API Key，图像审核已退回启发式检测"
+    elif mode != "heuristic":
+        note = f"未知的 image_moderation={mode}，已退回启发式检测"
+
+    if note:
+        import logging
+
+        logging.getLogger(__name__).warning("moderation_fallback: %s", note)
+
     return BlockingModerationFactory(
         KeywordModerationProvider(extra=extra),
-        HeuristicImageModeration(),
+        image_provider,
         enabled=bool(getattr(settings, "moderation_enabled", True)),
         fail_closed=bool(getattr(settings, "moderation_fail_closed", True)),
     )

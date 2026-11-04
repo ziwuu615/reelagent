@@ -230,6 +230,12 @@ class Settings:
     moderation_enabled: bool = True
     #: 外挂词库文件（每行 `分类:词1,词2`）。为空则只用内置示意词表。
     moderation_blocklist_file: str = ""
+    #: 图像审核实现：`heuristic`（离线启发式，只发现纯色/过小/不可解码）
+    #: 或 `dashscope`（多模态模型语义审核，需要 LLM API Key）。
+    #: 生产环境应为 dashscope —— 启发式挡不住涉黄、涉暴、涉政。
+    image_moderation: str = "heuristic"
+    image_moderation_model: str = "qwen-vl-plus"
+    image_moderation_timeout: float = 30.0
 
     #: ---- 供应商熔断 ----
     #: 连续失败多少次后打开断路器（打开后不再尝试该供应商，直接走降级）。
@@ -273,6 +279,9 @@ class Settings:
             moderation_enabled=_env_bool("REEL_MODERATION_ENABLED", True),
             moderation_fail_closed=_env_bool("REEL_MODERATION_FAIL_CLOSED", True),
             moderation_blocklist_file=_env("REEL_MODERATION_BLOCKLIST_FILE", ""),
+            image_moderation=_env("REEL_IMAGE_MODERATION", "heuristic"),
+            image_moderation_model=_env("REEL_IMAGE_MODERATION_MODEL", "qwen-vl-plus"),
+            image_moderation_timeout=_env_float("REEL_IMAGE_MODERATION_TIMEOUT", 30.0),
             breaker_threshold=_env_int("REEL_BREAKER_THRESHOLD", 5),
             breaker_reset_seconds=_env_float("REEL_BREAKER_RESET_SECONDS", 60.0),
             llm=ProviderConfig(

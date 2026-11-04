@@ -162,6 +162,23 @@ class ObservabilitySettings(BaseModel):
     slow_request_ms: int = 3000
     sentry_dsn: SecretStr = SecretStr("")
 
+    #: ---- 日志留存（网络安全法要求 ≥ 6 个月）----
+    #:
+    #: 输出位置：`stdout`（交给容器/日志平台）/ `file`（本地落盘 + 按天轮转）/
+    #: `both`（两者都写）。本地落盘的意义是**不依赖外部平台也能证明留存**。
+    log_sink: Literal["stdout", "file", "both"] = "stdout"
+    #: `file` / `both` 时的日志路径。
+    log_file: str = ""
+    #: 日志保留天数。默认 180 天，对应「不低于 6 个月」的监管要求。
+    log_retention_days: int = 180
+    #: 显式声明「日志已由外部平台留存 ≥180 天」。
+    #:
+    #: 为什么需要这个开关：容器化部署通常只把 stdout 交给日志平台，
+    #: 应用侧不落盘。此时「是否真的留存了 6 个月」由平台负责，
+    #: 应用无法自证。与其假装能校验，不如要求运维**显式声明**——
+    #: 声明是可以被追责的，静默通过不是。
+    log_external_retention: bool = False
+
 
 class BillingSettings(BaseModel):
     """Stripe 计费。未配置时产品降级为「额度模式」：注册即赠额度，不可充值。"""
@@ -185,6 +202,27 @@ class BillingSettings(BaseModel):
         if self.enabled and not self.secret_key.get_secret_value():
             raise ValueError("billing.enabled=true 时必须配置 stripe secret_key")
         return self
+
+
+# --------------------------------------------------------------------------- #
+# 产物保留期（GC）
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 合规
+# --------------------------------------------------------------------------- #
+class ComplianceSettings(BaseModel):
+    """合规相关的强制配置。
+
+    图像审核默认要求 `dashscope`（语义审核）。原因很直接：启发式只能发现
+    「纯色/过小/不可解码」，对涉黄涉暴涉政完全无感，把它当成合规审核是自欺。
+
+    生产环境这条会被强制校验：如果显式改成 heuristic，启动就会失败。
+    这样做的代价是「没有 LLM Key 就起不来」——但这正是对的：
+    对外提供生成式服务却没有任何语义审核能力，本来就不该上线。
+    """
+
+    image_moderation: Literal["heuristic", "dashscope"] = "dashscope"
+    image_moderation_model: str = "qwen-vl-plus"
 
 
 # --------------------------------------------------------------------------- #
@@ -302,6 +340,7 @@ class Settings(BaseSettings):
     billing: BillingSettings = BillingSettings()
     providers: ProvidersSettings = ProvidersSettings()
     retention: RetentionSettings = RetentionSettings()
+    compliance: ComplianceSettings = ComplianceSettings()
 
     # ---- 引擎参数 ----
     style: str = "cinematic"
@@ -356,6 +395,32 @@ class Settings(BaseSettings):
                 problems.append("生产环境 REEL_BASE_URL 必须是 https")
             if not self.providers.video.configured:
                 problems.append("未配置视频供应商 Key（REEL_PROVIDERS__VIDEO__API_KEY），产品将无法产出成片")
+
+            # ---- 日志留存（网络安全法：不低于 6 个月）----
+            obs = self.observability
+            if obs.log_sink in {"file", "both"} and not obs.log_file:
+                problems.append("REEL_OBSERVABILITY__LOG_SINK 要求落盘，但 REEL_OBSERVABILITY__LOG_FILE 为空")
+            if obs.log_sink == "stdout" and not obs.log_external_retention:
+                problems.append(
+                    "生产环境日志必须可留存 ≥180 天：二选一 —— "
+                    "① REEL_OBSERVABILITY__LOG_SINK=both 且配置 LOG_FILE（应用自己落盘轮转）；"
+                    "② REEL_OBSERVABILITY__LOG_EXTERNAL_RETENTION=true（声明由外部日志平台留存）"
+                )
+            if obs.log_retention_days < 180:
+                problems.append(
+                    f"REEL_OBSERVABILITY__LOG_RETENTION_DAYS={obs.log_retention_days} 低于 180 天"
+                    "（网络安全法要求日志留存不低于六个月）"
+                )
+
+            # ---- 内容审核能力（生成式 AI 服务备案的硬要求）----
+            if self.compliance.image_moderation != "dashscope":
+                problems.append(
+                    "生产环境图像审核必须使用语义审核：配置 "
+                    "REEL_COMPLIANCE__IMAGE_MODERATION=dashscope。启发式只能发现"
+                    "纯色/过小，对涉黄涉暴涉政无感，不能作为合规审核。"
+                )
+            elif not self.providers.llm.configured:
+                problems.append("图像语义审核依赖多模态模型，但未配置 REEL_PROVIDERS__LLM__API_KEY")
         else:
             # 开发环境：允许自动生成，保证 clone 即跑
             if not self.security.secret_key.get_secret_value():

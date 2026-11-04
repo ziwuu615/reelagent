@@ -76,6 +76,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(
         level=settings.observability.log_level,
         fmt=settings.observability.log_format,
+        log_file=settings.observability.log_file,
+        retention_days=settings.observability.log_retention_days,
+        sink=settings.observability.log_sink,
     )
     log.info(
         "app_starting",

@@ -219,6 +219,10 @@ def build_engine_settings(
         image=provider("image", settings.providers.image),
         video=provider("video", settings.providers.video),
         tts=provider("tts", settings.providers.tts),
+        # 图像语义审核的实现由云端合规配置决定：生产环境要求 dashscope。
+        # 引擎侧在缺 Key 时会带 warning 退回启发式，不阻塞流水线。
+        image_moderation=settings.compliance.image_moderation,
+        image_moderation_model=settings.compliance.image_moderation_model,
     )
     engine.ensure_workspace()
     return engine

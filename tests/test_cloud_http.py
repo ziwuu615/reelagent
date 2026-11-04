@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from reelagent_cloud.config import (
     DatabaseSettings,
+    ObservabilitySettings,
     ProviderSettings,
     ProvidersSettings,
     SecuritySettings,
@@ -58,8 +59,12 @@ class TestProductionConfigGate:
                 allowed_hosts=["reelagent.example.com"],
             ),
             "providers": ProvidersSettings(
-                video=ProviderSettings(provider="ark", model="m", api_key="sk-real", base_url="")
+                video=ProviderSettings(provider="ark", model="m", api_key="sk-real", base_url=""),
+                # 图像语义审核依赖多模态模型；生产环境不配 LLM Key 会被合规校验拦下
+                llm=ProviderSettings(provider="dashscope", model="qwen-plus", api_key="sk-llm"),
             ),
+            # 日志留存也是生产硬性要求，见 TestProductionLogRetention
+            "observability": ObservabilitySettings(log_external_retention=True),
         }
         kwargs.update(overrides)
         return kwargs

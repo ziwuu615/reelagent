@@ -286,5 +286,12 @@ def apply_aigc_label(
             return artifact, meta
     except Exception as exc:
         return artifact, {**meta, "error": f"标识烧录失败：{exc}"}
+    finally:
+        # 角标图只是中间产物，烧完就删。
+        # 留在 final/ 目录里会被当成一个「未知产物」混在交付物中，
+        # 虽然产物归集逻辑会忽略它，但目录干净比「靠下游忽略」更可靠。
+        # 生成成本极低（一张小 PNG），删掉不影响重试。
+        with contextlib.suppress(Exception):
+            label_png.unlink(missing_ok=True)
 
     return artifact, {**meta, "error": "无可用后端（mp4 需要 ffmpeg）"}
