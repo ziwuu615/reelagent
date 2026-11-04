@@ -1,4 +1,4 @@
-# 生产就绪清单
+﻿# 生产就绪清单
 
 > 这份文档回答一个问题：**现在能不能对外收钱上线？**
 > 每一项都写清「做到什么程度」「代码在哪」「怎么验证」「还差什么」。
@@ -25,7 +25,7 @@
 | 产物 TTL 与 GC | ✅ 已就绪 | `reelagent_cloud/services/retention.py`；worker 每 10 分钟回收 | `tests/test_retention.py` |
 | 账本漂移巡检 | ✅ 已就绪 | `credits.reconcile_all_orgs()`；worker 每小时全量巡检并打指标 | `tests/test_reconcile_all.py` |
 | 账本漂移告警 | ✅ 已就绪 | `deploy/monitoring/prometheus-rules.yml::LedgerDriftDetected`（P0，无 `for` 抑制） | `promtool check rules` |
-| 生成式 AI 双备案 | ⏳ 流程待办 | 需要算法备案 + 服务备案材料；代码侧需产出「内容安全机制」「应急处置预案」两章 | 法务 / 网信办 |
+| 生成式 AI 双备案 | ⏳ 材料就绪 / 流程待办 | 备案所需的《内容安全机制说明》与《应急处置预案》已成稿：`docs/compliance/`；仍需法务提交 | 法务 / 网信办 |
 
 ### P1：上线首月必须完成
 
@@ -35,10 +35,10 @@
 | 核心告警规则 | ✅ 已就绪 | `deploy/monitoring/prometheus-rules.yml`（12 条，按 P0/P1/P2 分级） | 每条都写了「先看什么、再做什么」 |
 | 资金/生命周期指标 | ✅ 已就绪 | `observability/metrics.py` 新增 drift / gc / moderation 三组 | 这三类问题的共同点是「不报错、只会安静地错」 |
 | SLI / SLO | ✅ 已定义 | 见本文第三节 | 需要接看板才算落地 |
-| 账号注销真实生效 | ⏳ 部分 | `storage.purge_org_storage()` 已实现，`retention.purge_project_artifacts()` 已实现；**缺 API 入口与调度** | 没有入口 = 用户的删除权没落实 |
-| 主动退款流程 | ❌ 未开始 | 现有「失败/取消全额退」是自动的，缺用户主动申请 | 需要 `LedgerKind.REFUND` + 审核工单 |
-| 租户配额原子扣减 | ❌ 未开始 | 现有 rate limit 是 fail-open 且 `anonymous/user` scope 无调用点 | 防「一个免费号刷爆成本」的唯一有效手段 |
-| 审计日志防篡改 | ❌ 未开始 | 现有 `audit_logs` 不参与业务事务、可改 | 需 append-only 表 + 链式哈希 |
+| 账号注销真实生效 | ✅ 已就绪 | `services/account.py`（清产物→软删项目→吊销 Key→匿名化→停用组织→审计）+ `DELETE /api/v1/me` | `tests/test_account_deletion.py`（5 项） |
+| 主动退款流程 | ✅ 已就绪 | `services/refunds.py`（按实际消耗退、幂等、7 天窗口）+ `POST /projects/{id}/refund` | `tests/test_refunds.py`（7 项） |
+| 租户配额（并发 + 每日） | ✅ 已就绪 | `services/quotas.py`，接在 `create_project` 幂等短路之后 | `tests/test_quotas.py`（5 项） |
+| 审计日志防篡改 | ✅ 已就绪 | `services/audit.py` 链式哈希（prev/entry hash + seq）+ `GET /audit/verify` + 迁移 `0002` | `tests/test_audit_chain.py`（5 项） |
 | 备份恢复演练 | ⏳ 文档就绪 | `docs/DEPLOYMENT.md` 有备份说明，**未做过恢复演练** | 没演练过就等于没有 |
 
 ### P2：三个月内
@@ -46,7 +46,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | 图像语义审核接入云端 | ❌ | 替换 `HeuristicImageModeration` 即可，调用方不用改 |
-| 日志留存 ≥ 6 个月 | ❌ | 网络安全法要求；需存储生命周期策略 |
+| 日志留存 ≥ 6 个月 | ⏳ 政策已定 | 留存矩阵见 `docs/compliance/data-retention.md`；应用日志的执行依赖部署侧日志平台配置 |
 | 用户实名（手机号） | ❌ | 生成式 AI 服务需真实身份信息认证 |
 | 月度账单 / 发票 | ❌ | 现有页内用量，无账单 PDF |
 | 灰度发布与回滚 | ❌ | CI 有（`.github/workflows/`），缺流量切分 |
@@ -108,7 +108,7 @@ LEFT JOIN + HAVING 让数据库一次算完，只把漂移的行带回来。
 
 ## 六、还没做的事，以及我为什么如实写出来
 
-未完成项集中在前述 P1/P2：退款、配额、审计防篡改、注销入口、实名、图像语义审核。
+当前仍未完成：用户实名认证、图像语义审核接入云端、月度账单/发票、灰度发布、等保、2FA。
 它们都不难，但都属于「要么有、要么没有」的合规/资金能力 —— 做一半比不做更危险，
 因为会让人误以为已经受控。
 

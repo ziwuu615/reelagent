@@ -17,6 +17,7 @@ import hashlib
 
 from fastapi import APIRouter, Header, Query, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from ...db.models import Job
 from ...deps import AppSettings, DbSession
@@ -25,11 +26,28 @@ from ...domain.errors import Forbidden, ValidationFailed
 from ...domain.plans import all_plans, get_plan
 from ...observability import get_logger
 from ...security import CurrentPrincipal, WritablePrincipal
-from ...services import accounts, billing, credits, jobs, projects
+from ...services import account as account_svc
+from ...services import accounts, audit, billing, credits, jobs, projects, refunds
 from ..ratelimit import get_limiter, limits_from
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["api"])
+
+
+# --------------------------------------------------------------------------- #
+# 请求体
+# --------------------------------------------------------------------------- #
+class RefundRequest(BaseModel):
+    """退款申请。原因可选，但要入库留痕（用于分析退款归因）。"""
+
+    reason: str = Field(default="", max_length=500)
+
+
+class DeleteAccountRequest(BaseModel):
+    """注销请求。必须带密码做再认证。"""
+
+    password: str = Field(min_length=1, max_length=200)
+    confirm: str = Field(default="", max_length=20)
 
 
 # --------------------------------------------------------------------------- #
@@ -413,7 +431,6 @@ async def api_audit(
 
     if principal.kind == "api_key":
         raise Forbidden("审计日志仅对浏览器会话开放")
-
     rows = await session.execute(
         select(AuditLog)
         .where(AuditLog.org_id == principal.org_id)
@@ -435,6 +452,77 @@ async def api_audit(
             for a in rows.scalars()
         ]
     }
+
+
+# --------------------------------------------------------------------------- #
+# 审计链校验
+# --------------------------------------------------------------------------- #
+@router.get("/audit/verify", summary="校验审计日志未被篡改")
+async def api_verify_audit(session: DbSession, principal: CurrentPrincipal) -> dict:
+    """返回第一处断点；全链可信时 `ok=true`。
+
+    暴露这个端点本身就是一种约束：只要有人跑了校验并留下记录，
+    「审计被动过」这件事就藏不住了。
+    """
+    if principal.kind == "api_key":
+        raise Forbidden("审计校验仅对浏览器会话开放")
+    return await audit.verify_chain(session, org_id=principal.org_id)
+
+
+# --------------------------------------------------------------------------- #
+# 退款
+# --------------------------------------------------------------------------- #
+@router.get("/refunds/refundable", summary="可申请退款的项目")
+async def api_refundable(session: DbSession, principal: CurrentPrincipal) -> dict:
+    items = await refunds.list_refundable(session, org_id=principal.org_id)
+    return {"items": items, "window_days": refunds.REFUND_WINDOW_DAYS}
+
+
+@router.post("/projects/{project_id}/refund", summary="为已交付项目申请退款")
+async def api_request_refund(
+    project_id: str,
+    session: DbSession,
+    principal: WritablePrincipal,
+    payload: RefundRequest | None = None,
+) -> dict:
+    """幂等：同一项目重复调用不会重复退款，返回 `replayed: true`。"""
+    return await refunds.request_refund(
+        session,
+        org_id=principal.org_id,
+        user_id=principal.user_id,
+        project_id=project_id,
+        reason=(payload.reason if payload else "") or "",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 账号注销
+# --------------------------------------------------------------------------- #
+@router.delete("/me", summary="注销账号（清除数据并可逆地停用）")
+async def api_delete_account(
+    session: DbSession,
+    principal: CurrentPrincipal,
+    settings: AppSettings,
+    payload: DeleteAccountRequest,
+) -> dict:
+    """注销需要重新输入密码 —— 这是不可逆操作，不能只靠一个有效会话就执行。
+
+    只对浏览器会话开放：API Key 被刻意限制在「读写项目」范围内，
+    不该具备注销账号这种能力。
+    """
+    if principal.kind == "api_key":
+        raise Forbidden("注销账号需要通过浏览器会话完成")
+
+    user = await accounts.get_user(session, principal.user_id or "")
+    await account_svc.assert_can_delete(session, user=user, org_id=principal.org_id)
+    receipt = await account_svc.delete_account(
+        session,
+        settings,
+        user=user,
+        org_id=principal.org_id,
+        password=payload.password,
+    )
+    return {"deleted": True, **receipt}
 
 
 # --------------------------------------------------------------------------- #

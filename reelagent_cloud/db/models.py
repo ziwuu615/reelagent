@@ -469,6 +469,17 @@ class AuditLog(Base):
     meta: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False, index=True)
 
+    #: 链式哈希：把每条审计串成一条链，任何一条被改动都会让后续全部对不上。
+    #:
+    #: 没有这两个字段时，「谁能证明审计日志没被改过」无法回答 —— 而审计日志的
+    #: 价值恰恰在于它可信。有了链，篡改必须同时改掉之后所有记录才能自洽，
+    #: 且校验时会停在第一处断点。
+    prev_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    entry_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: 组织内链序号，从 1 开始。把「谁在谁之后」变成可排序整数，
+    #: 避免同一毫秒内多条记录靠时间排序产生歧义。
+    chain_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     __table_args__ = (Index("ix_audit_org_created", "org_id", "created_at"),)
 
 
