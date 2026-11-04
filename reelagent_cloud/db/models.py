@@ -483,6 +483,56 @@ class AuditLog(Base):
     __table_args__ = (Index("ix_audit_org_created", "org_id", "created_at"),)
 
 
+class ReconciliationDiff(Base):
+    """对账差异记录。
+
+    ## 为什么必须落库，而不只是打个日志
+
+    `ledger_drift_total` 指标能告诉我们「有漂移」，日志能告诉我们「这次扫到了」，
+    但两者都无法回答三个运营必需的问题：
+
+        这条漂移是什么时候开始的？处理到哪一步了？谁在什么时候把它抹平的？
+
+    没有这三条，「差异处理」就只是「差异检测」。一张带 `resolved_at` 的表
+    是把它变成可追踪工单的最小代价。
+
+    ## 为什么用「未解决行去重」而不是每次都插一条
+
+    对账每小时跑一次，一条持续存在的漂移会在一周内产生 168 行噪音，
+    真正需要看的「新出现的差异」反而被淹没。所以同一机构、同一漂移金额
+    只保留一条未解决的记录；金额变化才算新差异（可能根因不同）。
+
+    ## 为什么漂移消失时自动置 resolved
+
+    对账是幂等的：如果下一轮不再漂移，说明问题已被修复（人工补账或 bug 修复），
+    这时把未解决行标记为「自动消除」比让人手工关单更可靠 ——
+    手工关单总会被忘掉，未解决队列会越积越长，最后没人看。
+    """
+
+    __tablename__ = "reconciliation_diffs"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: 检测时的快照。保留快照而不是只存 drift，是因为对账复盘需要知道
+    #: 「当时的余额与账本各是多少」，单看差额无法判断是哪一侧错了。
+    balance: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    ledger_sum: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    drift: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    detected_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    #: 检测到几次（持续漂移时会增长）。用途是判断「一直修不好」还是「刚出现」。
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    resolution: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    __table_args__ = (
+        Index("ix_recon_diff_org_open", "org_id", "resolved_at"),
+        Index("ix_recon_diff_detected", "detected_at"),
+    )
+
+
 class EmailOutbox(Base):
     """邮件发件箱。
 

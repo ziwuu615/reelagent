@@ -112,6 +112,92 @@ async def reconcile(session: AsyncSession, org_id: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 全量巡检
 # --------------------------------------------------------------------------- #
+async def record_diffs(
+    session: AsyncSession, *, drifts: list[dict[str, Any]], now: Any = None
+) -> dict[str, int]:
+    """把本轮漂移落成可追踪工单，并把已消失的工单自动关闭。
+
+    去重规则：同一机构 + 同一漂移金额 -> 复用未解决行，只累加 `occurrences`
+    并更新 `last_seen_at`。金额变了说明根因可能变了，另起一行。
+
+    为什么按「金额」而不是按「金额+余额」去重：余额每天在动（用户还在消费），
+    按余额去重会每次都对不上、每次都插新行，等于没去重。
+    """
+    from ..db.models import ReconciliationDiff
+
+    now = now or utcnow()
+    current = {d["org_id"]: d for d in drifts}
+
+    open_rows = (
+        await session.scalars(select(ReconciliationDiff).where(ReconciliationDiff.resolved_at.is_(None)))
+    ).all()
+
+    created = 0
+    updated = 0
+    resolved = 0
+
+    by_org: dict[str, list[ReconciliationDiff]] = {}
+    for row in open_rows:
+        by_org.setdefault(row.org_id, []).append(row)
+
+    for org_id, rows in by_org.items():
+        drift_now = current.get(org_id)
+        if drift_now is None:
+            # 本轮不再漂移 -> 自动关闭。手工关单总会被忘掉，队列会越积越长。
+            for row in rows:
+                row.resolved_at = now
+                row.resolution = "auto_resolved_no_longer_drifting"
+                resolved += 1
+            continue
+
+        matched = next((r for r in rows if int(r.drift) == drift_now["drift"]), None)
+        if matched is not None:
+            matched.last_seen_at = now
+            matched.occurrences += 1
+            updated += 1
+        else:
+            created += 1
+
+    # 本轮新出现的（或金额发生变化的）差异
+    seen_open_pairs = {(r.org_id, int(r.drift)) for r in open_rows if r.resolved_at is None}
+    for drift_now in drifts:
+        if (drift_now["org_id"], int(drift_now["drift"])) in seen_open_pairs:
+            continue
+        session.add(
+            ReconciliationDiff(
+                id=new_id(PREFIX["ledger"]),
+                org_id=drift_now["org_id"],
+                balance=drift_now["balance"],
+                ledger_sum=drift_now["ledger_sum"],
+                drift=drift_now["drift"],
+                detected_at=now,
+                last_seen_at=now,
+                occurrences=1,
+            )
+        )
+        created += 1
+
+    if created or resolved or updated:
+        await session.flush()
+    return {"created": created, "updated": updated, "resolved": resolved}
+
+
+async def list_open_diffs(session: AsyncSession, *, limit: int = 50) -> list[Any]:
+    """未解决的对账差异，按最早发现时间排序（先拖最久的）。"""
+    from ..db.models import ReconciliationDiff
+
+    return list(
+        (
+            await session.scalars(
+                select(ReconciliationDiff)
+                .where(ReconciliationDiff.resolved_at.is_(None))
+                .order_by(ReconciliationDiff.detected_at.asc())
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
 async def reconcile_all_orgs(session: AsyncSession, *, limit: int = 1000) -> dict[str, Any]:
     """巡检所有机构的账本一致性，只返回**不一致**的。
 
@@ -131,6 +217,7 @@ async def reconcile_all_orgs(session: AsyncSession, *, limit: int = 1000) -> dic
     告警规则就能直接写 `count > 0`，不需要在告警里再过滤。
     """
     balance = Organization.credits_balance
+    now = utcnow()
     ledger_sum = func.coalesce(func.sum(LedgerEntry.amount), 0)
 
     stmt = (
@@ -152,6 +239,10 @@ async def reconcile_all_orgs(session: AsyncSession, *, limit: int = 1000) -> dic
         }
         for row in rows
     ]
+
+    # 落库为可追踪工单。检测 + 告警只是「知道」，能不能闭环靠这张表。
+    await record_diffs(session, drifts=drifts, now=now)
+
     return {
         "checked_limit": limit,
         "drifted_count": len(drifts),

@@ -25,6 +25,7 @@
 | 产物 TTL 与 GC | ✅ 已就绪 | `reelagent_cloud/services/retention.py`；worker 每 10 分钟回收 | `tests/test_retention.py` |
 | 账本漂移巡检 | ✅ 已就绪 | `credits.reconcile_all_orgs()`；worker 每小时全量巡检并打指标 | `tests/test_reconcile_all.py` |
 | 账本漂移告警 | ✅ 已就绪 | `deploy/monitoring/prometheus-rules.yml::LedgerDriftDetected`（P0，无 `for` 抑制） | `promtool check rules` |
+| 对账差异工单 | ✅ 已就绪 | `reconciliation_diffs` 表 + `credits.record_diffs`：持续漂移去重累加、金额变化另起一行、漂移消失自动关闭；迁移 `0003` | `tests/test_reconciliation_diffs.py`（5 项） |
 | 生成式 AI 双备案 | ⏳ 材料就绪 / 流程待办 | 备案所需的《内容安全机制说明》与《应急处置预案》已成稿：`docs/compliance/`；仍需法务提交 | 法务 / 网信办 |
 
 ### P1：上线首月必须完成
