@@ -35,9 +35,27 @@
         <span>{{ product_name }} · 分镜工作室</span>
       </div>
       <div class="mock-body">
-        <div class="mock-tile"><em>sc01_sh01</em></div>
-        <div class="mock-tile"><em>sc01_sh02</em></div>
-        <div class="mock-tile"><em>sc02_sh01</em></div>
+        {#
+          这里放真实成片的关键帧，而不是空渐变块。
+          原因很直接：首屏右侧是访客唯一能"看到产品实际产出"的位置，
+          占位色块只会浪费它。三张图来自同一条 7 镜成片（雨夜便利店），
+          顺带证明了卖点——同一角色/场景跨镜头没有漂移。
+
+          aria-hidden 保留：这是装饰性示意图，不是可交互控件。
+          图片只走静态目录，不读取用户数据。
+        #}
+        <div class="mock-tile">
+          <img src="/static/img/sample-sc01.jpg" alt="" loading="lazy" decoding="async">
+          <em>sc01_sh01</em>
+        </div>
+        <div class="mock-tile">
+          <img src="/static/img/sample-sc04.jpg" alt="" loading="lazy" decoding="async">
+          <em>sc04_sh01</em>
+        </div>
+        <div class="mock-tile">
+          <img src="/static/img/sample-sc05.jpg" alt="" loading="lazy" decoding="async">
+          <em>sc05_sh01</em>
+        </div>
       </div>
       <div class="mock-foot">
         <div class="progress-meta">
