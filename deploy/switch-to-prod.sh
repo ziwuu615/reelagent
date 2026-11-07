@@ -82,16 +82,50 @@ set_env WORKER_CPUS "1.5"
 set_env WORKER_MEMORY "1024m"
 set_env CADDY_CPUS "0.5"
 set_env CADDY_MEMORY "128m"
+
+# ---- 合规与留存：这三项不写，api 会在 step 7 直接起不来 ----
+#
+# 生产校验器把它们列为硬门槛（见 reelagent_cloud/config.py 的
+# _validate_environment）：缺任何一项都会抛 ValidationError，容器反复重启，
+# 而 caddy 的 depends_on: api healthy 永远不满足 —— 表现是「整站 502」，
+# 但真正的原因藏在 api 容器日志里，很容易误判成证书问题。
+#
+# 图像审核必须是语义级：启发式只能发现纯色/过小，对涉黄涉暴涉政无感，
+# 拿它当合规审核等于备案材料造假。
+set_env REEL_COMPLIANCE__IMAGE_MODERATION "dashscope"
+
+# 日志留存：网络安全法要求不低于六个月。
+# SINK=both 让应用自己落盘轮转，这样「留了 180 天」不需要依赖外部平台自证。
+# 文件名由 docker-compose.prod.yml 按服务分别注入（api.log / worker.log），
+# 因为两个进程共享 artifacts 卷，写同一个文件会互相截断。
+set_env REEL_OBSERVABILITY__LOG_SINK "both"
+set_env REEL_OBSERVABILITY__LOG_RETENTION_DAYS "180"
+
 sed -i 's/\r$//' .env
-grep -E '^REEL_(ENV|BASE_URL|ICP_BEIAN|DOMAIN)=' .env | sed 's/^/  /'
+grep -E '^REEL_(ENV|BASE_URL|ICP_BEIAN|DOMAIN|COMPLIANCE|OBSERVABILITY__LOG)' .env | sed 's/^/  /'
 
 step "6. 校验 compose 合并结果"
+# !reset 需要 Compose >= 2.24。低版本会静默忽略它，
+# 于是 8000 继续对外暴露而脚本浑然不觉 —— 所以先验版本，再看结果。
+COMPOSE_RAW=$(docker compose version --short 2>/dev/null | tr -d 'v\n ')
+if [ -z "$COMPOSE_RAW" ]; then
+  die "无法读取 docker compose 版本，请确认已安装 compose v2 插件"
+fi
+# sort -V 做版本比较：2.24 以下视为不安全
+if [ "$(printf '%s\n2.24\n' "$COMPOSE_RAW" | sort -V | head -1)" != "2.24" ]; then
+  die "docker compose 版本 $COMPOSE_RAW 过低（需 >= 2.24，!reset 从该版本起可用）。请升级后重跑。"
+fi
+echo "  compose 版本: $COMPOSE_RAW"
+
 # 关键：确认 api 的端口映射被 !reset 清干净了。
-# 如果 8000 仍绑在 0.0.0.0 上，等于绕过 TLS 留了个后门。
+# 如果 api 仍 published 端口，等于绕过 TLS 留了个后门。
 MERGED=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml config 2>&1)
-echo "$MERGED" | grep -q 'published: "8000"' && die "api 仍然对外暴露 8000，!reset 没生效，请检查 Compose 版本（需 >= 2.24）"
+echo "$MERGED" | grep -q 'published: "8000"' && die "api 仍然对外暴露 8000，!reset 没生效，请检查 .env 里的 REEL_BIND_ADDR"
 echo "$MERGED" | grep -q 'published: "443"' || die "compose 合并后没有 443 映射"
-green "  api 不再暴露宿主端口，Caddy 接管 80/443"
+# 两个服务各自写日志文件，否则轮转会互相截断
+echo "$MERGED" | grep -q 'logs/api.log' || die "api 缺少按服务区分的 LOG_FILE"
+echo "$MERGED" | grep -q 'logs/worker.log' || die "worker 缺少按服务区分的 LOG_FILE"
+green "  api 不再暴露宿主端口，Caddy 接管 80/443，日志按服务分文件"
 
 step "7. 重启为生产编排"
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate 2>&1 | tail -12

@@ -20,9 +20,25 @@ services:
     # 而不是往里追加。
     #
     # 如果写成 `ports: []`，Compose 会把空数组当作「无操作」，
-    # 基础文件里的 `0.0.0.0:8000` 依然生效 —— 于是 HTTPS 挂上了，
-    # 但 8000 还裸奔在公网上，等于绕过了 TLS 开了一个后门。
+    # 基础文件里的端口映射依然生效 —— 于是 HTTPS 挂上了，
+    # 但应用端口还裸奔在公网上，等于绕过了 TLS 开了一个后门。
     ports: !reset []
+    environment:
+      # 日志必须按服务分文件。
+      #
+      # api 与 worker 共享同一个 `artifacts` 卷挂到 /app/workspace。
+      # 如果两者都写 /app/workspace/logs/app.log，就会有两个进程同时对
+      # 同一个文件做按天轮转（TimedRotatingFileHandler）——
+      # 结果不是「两份日志」，而是互相截断、丢行，甚至轮转出一个空归档。
+      # 那「日志留存 180 天」就变成假的，而这恰恰是备案核查时要拿日志证明的事。
+      #
+      # 所以：留存策略（SINK / RETENTION_DAYS）放 .env 全局，
+      # 文件路径在这里按角色分。将来加新服务也要给它单独一个文件名。
+      REEL_OBSERVABILITY__LOG_FILE: /app/workspace/logs/api.log
+
+  worker:
+    environment:
+      REEL_OBSERVABILITY__LOG_FILE: /app/workspace/logs/worker.log
 
   caddy:
     image: caddy:2.8-alpine
