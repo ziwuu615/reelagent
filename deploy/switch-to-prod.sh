@@ -14,9 +14,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
+# 从 .env 读取单个键的值。
+#
+# 为什么不直接 `source .env`：.env 里有这类值
+#     REEL_SECURITY__ALLOWED_HOSTS=["reelagent.online","www.reelagent.online"]
+# source 会做引号移除，把 ["a","b"] 变成 [a,b]，值就被改坏了。
+# 这份脚本只拿几个简单的键（域名、邮箱），用 grep+cut 取等号右边最安全：
+# 不做解析、不 eval、不展开变量。
+env_get() {
+  local key="$1"
+  [ -f .env ] || return 0
+  grep -m1 "^${key}=" .env 2>/dev/null | cut -d= -f2- | tr -d '\r'
+}
+
 ICP_NUMBER="${1:-}"
-DOMAIN="${REEL_DOMAIN:-reelagent.online}"
-ACME_EMAIL="${REEL_ACME_EMAIL:-}"
+# 优先级：环境变量 > .env > 默认值。
+#
+# 之前这里只读环境变量，于是出现「.env 里明明填了邮箱，脚本仍报缺少」——
+# bash 不像 docker compose 那样自动加载 .env，必须显式读。
+DOMAIN="${REEL_DOMAIN:-$(env_get REEL_DOMAIN)}"
+DOMAIN="${DOMAIN:-reelagent.online}"
+ACME_EMAIL="${REEL_ACME_EMAIL:-$(env_get REEL_ACME_EMAIL)}"
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
