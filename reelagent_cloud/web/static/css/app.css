@@ -132,14 +132,17 @@ hr, .rule { border: 0; border-top: 1px solid var(--line); margin: 1.25rem 0; }
 
 .section { padding: 72px 0; }
 .section-tight { padding: 44px 0; }
-.section-head { max-width: 720px; margin-bottom: 32px; }
+.section-head { max-width: 760px; margin-bottom: 34px; }
+/* 区块主标题比全局 h2 大一档：这几个区块是拿来读的内容，不是扫一眼的导航。
+   只限定 .section-head，避免影响 status / terms 等页面的 h2。 */
+.section-head h2 { font-size: 1.75rem; letter-spacing: -.01em; }
 .section-head.center { margin-left: auto; margin-right: auto; text-align: center; }
 .eyebrow {
   display: inline-block; margin-bottom: .5rem;
-  font-size: .75rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  font-size: .8125rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
   color: var(--brand);
 }
-.lede { font-size: 1.0625rem; color: var(--muted); }
+.lede { font-size: 1.125rem; color: var(--muted); }
 
 /* 12 栏网格，用于 3/2/1 栏自适应 */
 .grid { display: grid; gap: 20px; }
@@ -701,8 +704,8 @@ table.table td.tight { white-space: nowrap; }
   width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
   background: var(--brand-soft); color: var(--brand); margin-bottom: 14px;
 }
-.feature h3 { font-size: 1rem; margin-bottom: 6px; }
-.feature p { font-size: .875rem; color: var(--muted); }
+.feature h3 { font-size: 1.0625rem; margin-bottom: 6px; }
+.feature p { font-size: .9375rem; color: var(--muted); }
 
 .steps { counter-reset: step; display: grid; gap: 20px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .step-card { position: relative; padding: 24px 22px 22px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
@@ -713,15 +716,15 @@ table.table td.tight { white-space: nowrap; }
   font-size: .8125rem; font-weight: 620;
 }
 .step-num::before { content: counter(step); }
-.step-card h3 { margin-top: 10px; font-size: 1rem; }
-.step-card p { font-size: .875rem; color: var(--muted); margin-bottom: 0; }
+.step-card h3 { margin-top: 10px; font-size: 1.0625rem; }
+.step-card p { font-size: .9375rem; color: var(--muted); margin-bottom: 0; }
 
 .style-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .style-card { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--surface); }
 .style-preview { height: 120px; }
 .style-body { padding: 13px 15px; }
-.style-name { font-size: .9375rem; font-weight: 600; color: var(--ink); }
-.style-desc { font-size: .8125rem; color: var(--muted); margin-top: 3px; }
+.style-name { font-size: 1rem; font-weight: 600; color: var(--ink); }
+.style-desc { font-size: .875rem; color: var(--muted); margin-top: 4px; }
 
 .faq { display: grid; gap: 10px; }
 .faq-item { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
