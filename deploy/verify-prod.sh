@@ -30,7 +30,11 @@ done
 
 head_ "2. HTTP 自动跳转 HTTPS"
 LOC=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -m 10 "http://${DOMAIN}/" 2>/dev/null)
-echo "     $_GET $LOC"
+# 只打印实际取到的「状态码 + 跳转目标」，便于失败时看清真实值。
+# 这一行原先误写成 `echo "     $_GET $LOC"`：`$_GET` 从未定义，而脚本开头
+# 是 `set -u`，于是走到这行就 abort——整个验收在第 2 项中断，后面十几项
+# 检查一条都没跑。线上真实踩到过。
+echo "     $LOC"
 case "$LOC" in
   301*|308*) ok "HTTP 跳转到 HTTPS" ;;
   *) bad "HTTP 没有跳转（期望 301/308），当前: $LOC" ;;
