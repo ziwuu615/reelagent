@@ -36,33 +36,30 @@
       </div>
       <div class="mock-body">
         {#
-          这里放真实成片的关键帧，而不是空渐变块。
-          原因很直接：首屏右侧是访客唯一能"看到产品实际产出"的位置，
-          占位色块只会浪费它。三张图来自同一条 7 镜成片（雨夜便利店），
-          顺带证明了卖点——同一角色/场景跨镜头没有漂移。
+          首屏右侧放真实成片的循环播放，而不是占位色块。
 
-          aria-hidden 保留：这是装饰性示意图，不是可交互控件。
-          图片只走静态目录，不读取用户数据。
+          为什么是视频而不是静图：这一格是访客唯一能"看到产品实际产出"的位置，
+          一条 26 秒的真实成片能同时证明画质、运镜、配音节奏和跨镜头一致性——
+          静图只能证明其中一项。
+
+          工程细节：
+          - muted + autoplay + loop + playsinline：移动端 Safari 只允许静音自动播放
+          - preload="metadata"：先只取元数据，别让 1.3 MB 挡住首屏
+          - poster：视频就绪前先显示首帧，避免一片黑
+          - 视频是 540x960 / CRF30 / 无音轨，1.3 MB
+          - aria-hidden 由父容器给出：这是展示素材，不是可交互控件
         #}
-        <div class="mock-tile">
-          <img src="/static/img/sample-sc01.jpg" alt="" loading="lazy" decoding="async">
-          <em>sc01_sh01</em>
-        </div>
-        <div class="mock-tile">
-          <img src="/static/img/sample-sc04.jpg" alt="" loading="lazy" decoding="async">
-          <em>sc04_sh01</em>
-        </div>
-        <div class="mock-tile">
-          <img src="/static/img/sample-sc05.jpg" alt="" loading="lazy" decoding="async">
-          <em>sc05_sh01</em>
-        </div>
+        <video class="mock-video"
+               src="/static/video/sample-film.mp4"
+               poster="/static/video/sample-poster.jpg"
+               autoplay muted loop playsinline preload="metadata"
+               disablepictureinpicture></video>
       </div>
       <div class="mock-foot">
         <div class="progress-meta">
-          <span class="stage-name" style="color:#e6ecf8">逐镜生成</span>
-          <span class="progress-value" style="color:#94a3bd">62%</span>
+          <span class="stage-name" style="color:#e6ecf8">真实成片 · 循环播放</span>
+          <span class="progress-value" style="color:#94a3bd">7 镜 · 26 秒 · 720×1280</span>
         </div>
-        <div class="progress"><div class="progress-fill tone-busy" style="width: 62%"></div></div>
       </div>
     </div>
   </div>
